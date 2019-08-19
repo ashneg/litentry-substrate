@@ -82,7 +82,7 @@ decl_module! {
         // public functions
         fn register_identity(origin) -> Result {
             let sender = ensure_signed(origin)?;
-            let nonce = <Nonce>::get();
+            let nonce = <Nonce<T>>::get();
             let random_hash = (<system::Module<T>>::random_seed(), &sender, nonce)
                 .using_encoded(<T as system::Trait>::Hashing::hash);
 
@@ -92,7 +92,7 @@ decl_module! {
 
             Self::mint_identity(sender, random_hash, new_identity)?;
 
-            <Nonce>::mutate(|n| *n += 1);
+            <Nonce<T>>::mutate(|n| *n += 1);
 
             Ok(())
         }
@@ -121,7 +121,7 @@ decl_module! {
 
             let _sender = ensure_signed(origin)?;
 
-            let nonce = <Nonce>::get();
+            let nonce = <Nonce<T>>::get();
             let id = (<system::Module<T>>::random_seed(), &_sender, nonce)
                 .using_encoded(<T as system::Trait>::Hashing::hash);
 
@@ -134,6 +134,8 @@ decl_module! {
             };
 
             Self::mint_token(to, identity_id, id, new_token)?;
+
+            <Nonce<T>>::mutate(|n| *n += 1);
 
             Ok(())
         }
@@ -190,7 +192,7 @@ impl<T: Trait> Module<T> {
 
 		<IdentitiesArray<T>>::insert(all_identities_count, identity_id);
 		<IdentitiesIndex<T>>::insert(identity_id, all_identities_count);
-		<IdentitiesCount>::put(new_all_identities_count);
+		<IdentitiesCount<T>>::put(new_all_identities_count);
 
 		<OwnedIdentitiesArray<T>>::insert((to.clone(), owned_identities_count), identity_id);
 		<OwnedIdentitiesIndex<T>>::insert(identity_id, owned_identities_count);
@@ -208,6 +210,7 @@ impl<T: Trait> Module<T> {
 		token_id: T::Hash,
 		new_token: AuthorizedToken<T::Hash, T::Balance>) -> Result {
 
+		ensure!(<IdentityOwner<T>>::exists(identity_id), "Identity doesn't exist.");
 		ensure!(!<AuthorizedTokenOwner<T>>::exists(token_id), "Token already exists");
 
 		let owned_tokens_count = Self::tokens_count_of_owner(&to);
@@ -228,7 +231,7 @@ impl<T: Trait> Module<T> {
 
 		<AuthorizedTokensArray<T>>::insert(all_tokens_count, token_id);
 		<AuthorizedTokensIndex<T>>::insert(token_id, all_tokens_count);
-		<AuthorizedTokensCount>::put(new_all_tokens_count);
+		<AuthorizedTokensCount<T>>::put(new_all_tokens_count);
 
 		<OwnedAuthorizedTokensArray<T>>::insert((to.clone(), owned_tokens_count), token_id);
 		<OwnedAuthorizedTokensIndex<T>>::insert(token_id, owned_tokens_count);
