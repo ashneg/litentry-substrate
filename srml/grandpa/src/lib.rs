@@ -31,12 +31,17 @@
 pub use substrate_finality_grandpa_primitives as fg_primitives;
 
 use rstd::prelude::*;
-use parity_codec::{self as codec, Encode, Decode};
+use codec::{self as codec, Encode, Decode, Error};
 use srml_support::{
 	decl_event, decl_storage, decl_module, dispatch::Result, storage::StorageValue
 };
-use primitives::{
-	generic::{DigestItem, OpaqueDigestItemId}, traits::CurrentHeight
+use sr_primitives::{
+	generic::{DigestItem, OpaqueDigestItemId}, traits::Zero,
+	Perbill,
+};
+use sr_staking_primitives::{
+	SessionIndex,
+	offence::{Offence, Kind},
 };
 use fg_primitives::{ScheduledChange, ConsensusLog, GRANDPA_ENGINE_ID};
 pub use fg_primitives::{AuthorityId, AuthorityWeight};
@@ -78,11 +83,11 @@ pub struct StoredPendingChange<N> {
 }
 
 impl<N: Decode> Decode for StoredPendingChange<N> {
-	fn decode<I: codec::Input>(value: &mut I) -> Option<Self> {
+	fn decode<I: codec::Input>(value: &mut I) -> core::result::Result<Self, Error> {
 		let old = OldStoredPendingChange::decode(value)?;
 		let forced = <Option<N>>::decode(value).unwrap_or(None);
 
-		Some(StoredPendingChange {
+		Ok(StoredPendingChange {
 			scheduled_at: old.scheduled_at,
 			delay: old.delay,
 			next_authorities: old.next_authorities,
@@ -91,17 +96,52 @@ impl<N: Decode> Decode for StoredPendingChange<N> {
 	}
 }
 
+/// Current state of the GRANDPA authority set. State transitions must happen in
+/// the same order of states defined below, e.g. `Paused` implies a prior
+/// `PendingPause`.
+#[derive(Decode, Encode)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub enum StoredState<N> {
+	/// The current authority set is live, and GRANDPA is enabled.
+	Live,
+	/// There is a pending pause event which will be enacted at the given block
+	/// height.
+	PendingPause {
+		/// Block at which the intention to pause was scheduled.
+		scheduled_at: N,
+		/// Number of blocks after which the change will be enacted.
+		delay: N
+	},
+	/// The current GRANDPA authority set is paused.
+	Paused,
+	/// There is a pending resume event which will be enacted at the given block
+	/// height.
+	PendingResume {
+		/// Block at which the intention to resume was scheduled.
+		scheduled_at: N,
+		/// Number of blocks after which the change will be enacted.
+		delay: N,
+	},
+}
+
 decl_event!(
 	pub enum Event {
 		/// New authority set has been applied.
 		NewAuthorities(Vec<(AuthorityId, u64)>),
+		/// Current authority set has been paused.
+		Paused,
+		/// Current authority set has been resumed.
+		Resumed,
 	}
 );
 
 decl_storage! {
 	trait Store for Module<T: Trait> as GrandpaFinality {
 		/// The current authority set.
-		Authorities get(authorities) config(): Vec<(AuthorityId, AuthorityWeight)>;
+		Authorities get(authorities): Vec<(AuthorityId, AuthorityWeight)>;
+
+		/// State of the current authority set.
+		State get(state): StoredState<T::BlockNumber> = StoredState::Live;
 
 		/// Pending change: (signaled at, scheduled change).
 		PendingChange: Option<StoredPendingChange<T::BlockNumber>>;
@@ -111,6 +151,18 @@ decl_storage! {
 
 		/// `true` if we are currently stalled.
 		Stalled get(stalled): Option<(T::BlockNumber, T::BlockNumber)>;
+	}
+	add_extra_genesis {
+		config(authorities): Vec<(AuthorityId, AuthorityWeight)>;
+		build(|
+			storage: &mut (sr_primitives::StorageOverlay, sr_primitives::ChildrenStorageOverlay),
+			config: &GenesisConfig
+		| {
+			runtime_io::with_storage(
+				storage,
+				|| Module::<T>::initialize_authorities(&config.authorities),
+			);
+		})
 	}
 }
 
@@ -125,12 +177,14 @@ decl_module! {
 		}
 
 		fn on_finalize(block_number: T::BlockNumber) {
+			// check for scheduled pending authority set changes
 			if let Some(pending_change) = <PendingChange<T>>::get() {
+				// emit signal if we're at the block that scheduled the change
 				if block_number == pending_change.scheduled_at {
 					if let Some(median) = pending_change.forced {
 						Self::deposit_log(ConsensusLog::ForcedChange(
 							median,
-							ScheduledChange{
+							ScheduledChange {
 								delay: pending_change.delay,
 								next_authorities: pending_change.next_authorities.clone(),
 							}
@@ -145,6 +199,7 @@ decl_module! {
 					}
 				}
 
+				// enact the change if we've reached the enacting block
 				if block_number == pending_change.scheduled_at + pending_change.delay {
 					Authorities::put(&pending_change.next_authorities);
 					Self::deposit_event(
@@ -152,6 +207,35 @@ decl_module! {
 					);
 					<PendingChange<T>>::kill();
 				}
+			}
+
+			// check for scheduled pending state changes
+			match <State<T>>::get() {
+				StoredState::PendingPause { scheduled_at, delay } => {
+					// signal change to pause
+					if block_number == scheduled_at {
+						Self::deposit_log(ConsensusLog::Pause(delay));
+					}
+
+					// enact change to paused state
+					if block_number == scheduled_at + delay {
+						<State<T>>::put(StoredState::Paused);
+						Self::deposit_event(Event::Paused);
+					}
+				},
+				StoredState::PendingResume { scheduled_at, delay } => {
+					// signal change to resume
+					if block_number == scheduled_at {
+						Self::deposit_log(ConsensusLog::Resume(delay));
+					}
+
+					// enact change to live state
+					if block_number == scheduled_at + delay {
+						<State<T>>::put(StoredState::Live);
+						Self::deposit_event(Event::Resumed);
+					}
+				},
+				_ => {},
 			}
 		}
 	}
@@ -161,6 +245,36 @@ impl<T: Trait> Module<T> {
 	/// Get the current set of authorities, along with their respective weights.
 	pub fn grandpa_authorities() -> Vec<(AuthorityId, u64)> {
 		Authorities::get()
+	}
+
+	pub fn schedule_pause(in_blocks: T::BlockNumber) -> Result {
+		if let StoredState::Live = <State<T>>::get() {
+			let scheduled_at = <system::Module<T>>::block_number();
+			<State<T>>::put(StoredState::PendingPause {
+				delay: in_blocks,
+				scheduled_at,
+			});
+
+			Ok(())
+		} else {
+			Err("Attempt to signal GRANDPA pause when the authority set isn't live \
+				(either paused or already pending pause).")
+		}
+	}
+
+	pub fn schedule_resume(in_blocks: T::BlockNumber) -> Result {
+		if let StoredState::Paused = <State<T>>::get() {
+			let scheduled_at = <system::Module<T>>::block_number();
+			<State<T>>::put(StoredState::PendingResume {
+				delay: in_blocks,
+				scheduled_at,
+			});
+
+			Ok(())
+		} else {
+			Err("Attempt to signal GRANDPA resume when the authority set isn't paused \
+				(either live or already pending resume).")
+		}
 	}
 
 	/// Schedule a change in the authorities.
@@ -183,7 +297,7 @@ impl<T: Trait> Module<T> {
 		forced: Option<T::BlockNumber>,
 	) -> Result {
 		if !<PendingChange<T>>::exists() {
-			let scheduled_at = system::ChainContext::<T>::default().current_height();
+			let scheduled_at = <system::Module<T>>::block_number();
 
 			if let Some(_) = forced {
 				if Self::next_forced().map_or(false, |next| next > scheduled_at) {
@@ -213,6 +327,13 @@ impl<T: Trait> Module<T> {
 		let log: DigestItem<T::Hash> = DigestItem::Consensus(GRANDPA_ENGINE_ID, log.encode());
 		<system::Module<T>>::deposit_log(log.into());
 	}
+
+	fn initialize_authorities(authorities: &[(AuthorityId, AuthorityWeight)]) {
+		if !authorities.is_empty() {
+			assert!(Authorities::get().is_empty(), "Authorities are already initialized!");
+			Authorities::put_ref(authorities);
+		}
+	}
 }
 
 impl<T: Trait> Module<T> {
@@ -232,20 +353,38 @@ impl<T: Trait> Module<T> {
 	{
 		Self::grandpa_log(digest).and_then(|signal| signal.try_into_forced_change())
 	}
+
+	pub fn pending_pause(digest: &DigestOf<T>)
+		-> Option<T::BlockNumber>
+	{
+		Self::grandpa_log(digest).and_then(|signal| signal.try_into_pause())
+	}
+
+	pub fn pending_resume(digest: &DigestOf<T>)
+		-> Option<T::BlockNumber>
+	{
+		Self::grandpa_log(digest).and_then(|signal| signal.try_into_resume())
+	}
 }
 
 impl<T: Trait> session::OneSessionHandler<T::AccountId> for Module<T> {
 	type Key = AuthorityId;
 
-	fn on_new_session<'a, I: 'a>(changed: bool, validators: I)
+	fn on_genesis_session<'a, I: 'a>(validators: I)
+		where I: Iterator<Item=(&'a T::AccountId, AuthorityId)>
+	{
+		let authorities = validators.map(|(_, k)| (k, 1)).collect::<Vec<_>>();
+		Self::initialize_authorities(&authorities);
+	}
+
+	fn on_new_session<'a, I: 'a>(changed: bool, validators: I, _queued_validators: I)
 		where I: Iterator<Item=(&'a T::AccountId, AuthorityId)>
 	{
 		// instant changes
 		if changed {
-			let next_authorities = validators.map(|(_, k)| (k, 1u64)).collect::<Vec<_>>();
+			let next_authorities = validators.map(|(_, k)| (k, 1)).collect::<Vec<_>>();
 			let last_authorities = <Module<T>>::grandpa_authorities();
 			if next_authorities != last_authorities {
-				use primitives::traits::Zero;
 				if let Some((further_wait, median)) = <Stalled<T>>::take() {
 					let _ = Self::schedule_change(next_authorities, further_wait, Some(median));
 				} else {
@@ -254,6 +393,7 @@ impl<T: Trait> session::OneSessionHandler<T::AccountId> for Module<T> {
 			}
 		}
 	}
+
 	fn on_disabled(i: usize) {
 		Self::deposit_log(ConsensusLog::OnDisabled(i as u64))
 	}
@@ -265,5 +405,58 @@ impl<T: Trait> finality_tracker::OnFinalizationStalled<T::BlockNumber> for Modul
 		// to figure out _who_ failed. until then, we can't meaningfully guard
 		// against `next == last` the way that normal session changes do.
 		<Stalled<T>>::put((further_wait, median));
+	}
+}
+
+/// A round number and set id which point on the time of an offence.
+#[derive(Copy, Clone, PartialOrd, Ord, Eq, PartialEq, Encode, Decode)]
+struct GrandpaTimeSlot {
+	// The order of these matters for `derive(Ord)`.
+	set_id: u64,
+	round: u64,
+}
+
+// TODO [slashing]: Integrate this.
+/// A grandpa equivocation offence report.
+#[allow(dead_code)]
+struct GrandpaEquivocationOffence<FullIdentification> {
+	/// Time slot at which this incident happened.
+	time_slot: GrandpaTimeSlot,
+	/// The session index in which the incident happened.
+	session_index: SessionIndex,
+	/// The size of the validator set at the time of the offence.
+	validator_set_count: u32,
+	/// The authority which produced this equivocation.
+	offender: FullIdentification,
+}
+
+impl<FullIdentification: Clone> Offence<FullIdentification> for GrandpaEquivocationOffence<FullIdentification> {
+	const ID: Kind = *b"grandpa:equivoca";
+	type TimeSlot = GrandpaTimeSlot;
+
+	fn offenders(&self) -> Vec<FullIdentification> {
+		vec![self.offender.clone()]
+	}
+
+	fn session_index(&self) -> SessionIndex {
+		self.session_index
+	}
+
+	fn validator_set_count(&self) -> u32 {
+		self.validator_set_count
+	}
+
+	fn time_slot(&self) -> Self::TimeSlot {
+		self.time_slot
+	}
+
+	fn slash_fraction(
+		offenders_count: u32,
+		validator_set_count: u32,
+	) -> Perbill {
+		// the formula is min((3k / n)^2, 1)
+		let x = Perbill::from_rational_approximation(3 * offenders_count, validator_set_count);
+		// _ ^ 2
+		x.square()
 	}
 }

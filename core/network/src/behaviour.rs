@@ -23,11 +23,11 @@ use crate::protocol::{CustomMessageOutcome, Protocol};
 use futures::prelude::*;
 use libp2p::NetworkBehaviour;
 use libp2p::core::{Multiaddr, PeerId, PublicKey};
-use libp2p::core::swarm::{NetworkBehaviourAction, NetworkBehaviourEventProcess};
+use libp2p::kad::record;
+use libp2p::swarm::{NetworkBehaviourAction, NetworkBehaviourEventProcess};
 use libp2p::core::{nodes::Substream, muxing::StreamMuxerBox};
-use libp2p::multihash::Multihash;
 use log::warn;
-use runtime_primitives::traits::Block as BlockT;
+use sr_primitives::traits::Block as BlockT;
 use std::iter;
 use void;
 
@@ -101,12 +101,12 @@ impl<B: BlockT, S: NetworkSpecialization<B>, H: ExHashT> Behaviour<B, S, H> {
 	}
 
 	/// Start querying a record from the DHT. Will later produce either a `ValueFound` or a `ValueNotFound` event.
-	pub fn get_value(&mut self, key: &Multihash) {
+	pub fn get_value(&mut self, key: &record::Key) {
 		self.discovery.get_value(key);
 	}
 
 	/// Starts putting a record into DHT. Will later produce either a `ValuePut` or a `ValuePutFailed` event.
-	pub fn put_value(&mut self, key: Multihash, value: Vec<u8>) {
+	pub fn put_value(&mut self, key: record::Key, value: Vec<u8>) {
 		self.discovery.put_value(key, value);
 	}
 }
@@ -150,6 +150,12 @@ impl<B: BlockT, S: NetworkSpecialization<B>, H: ExHashT> NetworkBehaviourEventPr
 	for Behaviour<B, S, H> {
 	fn inject_event(&mut self, out: DiscoveryOut) {
 		match out {
+			DiscoveryOut::UnroutablePeer(_peer_id) => {
+				// Obtaining and reporting listen addresses for unroutable peers back
+				// to Kademlia is handled by the `Identify` protocol, part of the
+				// `DebugInfoBehaviour`. See the `NetworkBehaviourEventProcess`
+				// implementation for `DebugInfoEvent`.
+			}
 			DiscoveryOut::Discovered(peer_id) => {
 				self.substrate.add_discovered_nodes(iter::once(peer_id));
 			}

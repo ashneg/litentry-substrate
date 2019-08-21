@@ -18,9 +18,9 @@
 
 use std::sync::Arc;
 
-use runtime_primitives::traits::{Block as BlockT, Header as HeaderT, NumberFor};
-use runtime_primitives::generic::BlockId;
-use runtime_primitives::Justification;
+use sr_primitives::traits::{Block as BlockT, Header as HeaderT, NumberFor};
+use sr_primitives::generic::BlockId;
+use sr_primitives::Justification;
 use consensus::well_known_cache_keys;
 
 use crate::error::{Error, Result};
@@ -106,7 +106,13 @@ pub trait Cache<Block: BlockT>: Send + Sync {
 	/// Otherwise cache may end up in inconsistent state.
 	fn initialize(&self, key: &well_known_cache_keys::Id, value_at_genesis: Vec<u8>) -> Result<()>;
 	/// Returns cached value by the given key.
-	fn get_at(&self, key: &well_known_cache_keys::Id, block: &BlockId<Block>) -> Option<Vec<u8>>;
+	///
+	/// Returned tuple is the range where value has been active and the value itself.
+	fn get_at(
+		&self,
+		key: &well_known_cache_keys::Id,
+		block: &BlockId<Block>,
+	) -> Option<((NumberFor<Block>, Block::Hash), Option<(NumberFor<Block>, Block::Hash)>, Vec<u8>)>;
 }
 
 /// Blockchain info
@@ -196,7 +202,7 @@ pub fn tree_route<Block: BlockT, Backend: HeaderBackend<Block>>(
 	from: BlockId<Block>,
 	to: BlockId<Block>,
 ) -> Result<TreeRoute<Block>> {
-	use runtime_primitives::traits::Header;
+	use sr_primitives::traits::Header;
 
 	let load_header = |id: BlockId<Block>| {
 		match backend.header(id) {
