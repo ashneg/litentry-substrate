@@ -9,8 +9,6 @@
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
 use rstd::prelude::*;
-use parity_codec::{Encode, Decode};
-use codec;
 use primitives::{OpaqueMetadata, crypto::key_types};
 use sr_primitives::{
 	ApplyResult, transaction_validity::TransactionValidity, generic, create_runtime_str,

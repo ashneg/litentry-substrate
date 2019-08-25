@@ -8,7 +8,7 @@
 /// For more guidance on Substrate modules, see the example module
 /// https://github.com/paritytech/substrate/blob/master/srml/example/src/lib.rs
 
-use support::{decl_module, decl_storage, decl_event, StorageValue, dispatch::Result};
+use support::{decl_module, decl_storage, decl_event, dispatch::Result, StorageMap, StorageValue, ensure, fail};
 use system::ensure_signed;
 use sr_primitives::traits::Hash;
 //use parity_codec::{Encode, Decode, WrapperTypeDecode};
@@ -88,91 +88,212 @@ decl_storage! {
     }
 }
 
-// The module's dispatchable functions.
+
 decl_module! {
-	/// The module declaration.
-	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
-		// Initializing events
-		// this is needed only if you are using events in your module
-		fn deposit_event<T>() = default;
+    pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 
-		// Just a dummy entry point.
-		// function that can be called by the external world as an extrinsics call
-		// takes a parameter of the type `AccountId`, stores it and emits an event
-		pub fn do_something(origin, something: u32) -> Result {
-			// TODO: You only need this if you want to check it was signed.
+        fn deposit_event<T>() = default;
 
-			Ok(())
+        // public functions
+        fn register_identity(origin) -> Result {
+            let sender = ensure_signed(origin)?;
+            let nonce = Nonce::get();
+            let random_hash = (<system::Module<T>>::random_seed(), &sender, nonce)
+                .using_encoded(<T as system::Trait>::Hashing::hash);
+
+            let new_identity = Identity {
+                id: random_hash,
+            };
+
+            Self::mint_identity(sender, random_hash, new_identity)?;
+
+            Nonce::mutate(|n| *n += 1);
+
+            Ok(())
+        }
+
+        fn register_identity_with_id(origin, identity_id: T::Hash) -> Result {
+            let sender = ensure_signed(origin)?;
+
+            let new_identity = Identity {
+                id: identity_id,
+            };
+
+            Self::mint_identity(sender, identity_id, new_identity)?;
+
+            Ok(())
+        }
+
+
+        fn create_authorized_token(
+            origin,
+            to: T::AccountId,
+            identity_id: T::Hash,
+            cost: T::Balance,
+            data: u64,
+            datatype:u64,
+            expired: u64) -> Result {
+
+            let _sender = ensure_signed(origin)?;
+
+            let nonce = Nonce::get();
+            let id = (<system::Module<T>>::random_seed(), &_sender, nonce)
+                .using_encoded(<T as system::Trait>::Hashing::hash);
+
+            let new_token = AuthorizedToken {
+                id,
+                cost,
+                data,
+                datatype,
+                expired
+            };
+
+            Self::mint_token(to, identity_id, id, new_token)?;
+
+            Nonce::mutate(|n| *n += 1);
+
+            Ok(())
+        }
+
+
+        fn issue_token(
+            origin,
+            to: T::AccountId,
+            identity_id: T::Hash,
+            cost: T::Balance,
+            data: u64,
+            datatype:u64,
+            expired: u64) -> Result {
+
+            //let _sender = ensure_signed(origin.clone())?;
+
+            Self::create_authorized_token(origin, to, identity_id, cost, data, datatype, expired)
+        }
+
+        fn transfer_token(origin, to: T::AccountId, token_id: T::Hash ) -> Result {
+            let sender = ensure_signed(origin)?;
+
+            let owner = Self::owner_of_token(token_id).ok_or("No owner for this token")?;
+            ensure!(owner == sender, "You do not own this token");
+
+            Self::token_transfer_from(sender, to, token_id)?;
+
+            Ok(())
+        }
+
+        //fn recall_token(origin, token: T::Hash) -> Result {}
+
+        //fn recall_all_identity_token(origin, identity_id: T::Hash ) -> Result {}
+
+        //fn update_token(origin, token: T::Hash, identity_data: String) -> Result {}
+
+    }
+}
+
+impl<T: Trait> Module<T> {
+	fn mint_identity(to: T::AccountId, identity_id: T::Hash, new_identity: Identity<T::Hash>) -> Result {
+		ensure!(!<IdentityOwner<T>>::exists(identity_id), "Identity already exists");
+
+		let owned_identities_count = Self::identities_count_of_owner(&to);
+		let new_owned_identities_count = owned_identities_count.checked_add(1)
+			.ok_or("Overflow adding a new identity to owner")?;
+
+		let all_identities_count = Self::identities_count();
+		let new_all_identities_count = all_identities_count.checked_add(1)
+			.ok_or("Overflow adding a new identity to total supply")?;
+
+		<Identities<T>>::insert(identity_id, new_identity);
+		<IdentityOwner<T>>::insert(identity_id, &to);
+
+		<IdentitiesArray<T>>::insert(all_identities_count, identity_id);
+		<IdentitiesIndex<T>>::insert(identity_id, all_identities_count);
+		IdentitiesCount::put(new_all_identities_count);
+
+		<OwnedIdentitiesArray<T>>::insert((to.clone(), owned_identities_count), identity_id);
+		<OwnedIdentitiesIndex<T>>::insert(identity_id, owned_identities_count);
+		<OwnedIdentitiesCount<T>>::insert(&to, new_owned_identities_count);
+
+
+		Self::deposit_event(RawEvent::IdentityCreated(to, identity_id));
+
+		Ok(())
+	}
+
+	fn mint_token(
+		to: T::AccountId,
+		identity_id: T::Hash,
+		token_id: T::Hash,
+		new_token: AuthorizedToken<T::Hash, T::Balance>) -> Result {
+
+		ensure!(<IdentityOwner<T>>::exists(identity_id), "Identity doesn't exist.");
+		ensure!(!<AuthorizedTokenOwner<T>>::exists(token_id), "Token already exists");
+
+		let owned_tokens_count = Self::tokens_count_of_owner(&to);
+		let new_owned_tokens_count = owned_tokens_count.checked_add(1)
+			.ok_or("Overflow adding a new token to owner")?;
+
+		let identity_tokens_count = Self::tokens_count_of_identity(identity_id);
+		let new_identity_tokens_count = identity_tokens_count.checked_add(1)
+			.ok_or("Overflow adding a new token to identity")?;
+
+		let all_tokens_count = Self::tokens_count();
+		let new_all_tokens_count = all_tokens_count.checked_add(1)
+			.ok_or("Overflow adding a new token to total supply")?;
+
+		<AuthorizedTokens<T>>::insert(token_id, new_token);
+		<AuthorizedTokenOwner<T>>::insert(token_id, &to);
+		<AuthorizedTokenIdentity<T>>::insert(token_id, &identity_id);
+
+		<AuthorizedTokensArray<T>>::insert(all_tokens_count, token_id);
+		<AuthorizedTokensIndex<T>>::insert(token_id, all_tokens_count);
+		AuthorizedTokensCount::put(new_all_tokens_count);
+
+		<OwnedAuthorizedTokensArray<T>>::insert((to.clone(), owned_tokens_count), token_id);
+		<OwnedAuthorizedTokensIndex<T>>::insert(token_id, owned_tokens_count);
+		<OwnedAuthorizedTokensCount<T>>::insert(&to, new_owned_tokens_count);
+
+		<IdentityAuthorizedTokensArray<T>>::insert((identity_id, identity_tokens_count), token_id);
+		<IdentityAuthorizedTokensIndex<T>>::insert(token_id, identity_tokens_count);
+		<IdentityAuthorizedTokensCount<T>>::insert(identity_id, new_identity_tokens_count);
+
+		Self::deposit_event(RawEvent::AuthorizedTokenCreated(to, identity_id, token_id));
+
+		Ok(())
+	}
+
+	fn token_transfer_from(from: T::AccountId, to: T::AccountId, token_id: T::Hash) -> Result {
+		let owner = Self::owner_of_token(token_id).ok_or("No owner for this token")?;
+
+		ensure!(owner == from, "'from' account does not own this token");
+
+		let owned_token_count_from = Self::tokens_count_of_owner(&from);
+		let owned_token_count_to = Self::tokens_count_of_owner(&to);
+
+		let new_owned_token_count_to = owned_token_count_to.checked_add(1)
+			.ok_or("Transfer causes overflow of 'to' token balance")?;
+
+		let new_owned_token_count_from = owned_token_count_from.checked_sub(1)
+			.ok_or("Transfer causes underflow of 'from' token balance")?;
+
+		let token_index = <OwnedAuthorizedTokensIndex<T>>::get(token_id);
+		if token_index != new_owned_token_count_from {
+			let last_token_id = <OwnedAuthorizedTokensArray<T>>::get((from.clone(), new_owned_token_count_from));
+			<OwnedAuthorizedTokensArray<T>>::insert((from.clone(), token_index), last_token_id);
+			<OwnedAuthorizedTokensIndex<T>>::insert(last_token_id, token_index);
 		}
+
+		<AuthorizedTokenOwner<T>>::insert(&token_id, &to);
+		<OwnedAuthorizedTokensIndex<T>>::insert(token_id, owned_token_count_to);
+
+		<OwnedAuthorizedTokensArray<T>>::remove((from.clone(), new_owned_token_count_from));
+		<OwnedAuthorizedTokensArray<T>>::insert((to.clone(), owned_token_count_to), token_id);
+
+		<OwnedAuthorizedTokensCount<T>>::insert(&from, new_owned_token_count_from);
+		<OwnedAuthorizedTokensCount<T>>::insert(&to, new_owned_token_count_to);
+
+		Self::deposit_event(RawEvent::AuthorizedTokenTransferred(from, to, token_id));
+
+		Ok(())
 	}
 }
 
-
-
-/// tests for this module
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	use runtime_io::with_externalities;
-	use primitives::{H256, Blake2Hasher};
-	use support::{impl_outer_origin, assert_ok, parameter_types};
-	use sr_primitives::{traits::{BlakeTwo256, IdentityLookup}, testing::Header};
-	use sr_primitives::weights::Weight;
-	use sr_primitives::Perbill;
-
-	impl_outer_origin! {
-		pub enum Origin for Test {}
-	}
-
-	// For testing the module, we construct most of a mock runtime. This means
-	// first constructing a configuration type (`Test`) which `impl`s each of the
-	// configuration traits of modules we want to use.
-	#[derive(Clone, Eq, PartialEq)]
-	pub struct Test;
-	parameter_types! {
-		pub const BlockHashCount: u64 = 250;
-		pub const MaximumBlockWeight: Weight = 1024;
-		pub const MaximumBlockLength: u32 = 2 * 1024;
-		pub const AvailableBlockRatio: Perbill = Perbill::from_percent(75);
-	}
-	impl system::Trait for Test {
-		type Origin = Origin;
-		type Call = ();
-		type Index = u64;
-		type BlockNumber = u64;
-		type Hash = H256;
-		type Hashing = BlakeTwo256;
-		type AccountId = u64;
-		type Lookup = IdentityLookup<Self::AccountId>;
-		type Header = Header;
-		type WeightMultiplierUpdate = ();
-		type Event = ();
-		type BlockHashCount = BlockHashCount;
-		type MaximumBlockWeight = MaximumBlockWeight;
-		type MaximumBlockLength = MaximumBlockLength;
-		type AvailableBlockRatio = AvailableBlockRatio;
-		type Version = ();
-	}
-	impl Trait for Test {
-		type Event = ();
-	}
-	type TemplateModule = Module<Test>;
-
-	// This function basically just builds a genesis storage key/value store according to
-	// our desired mockup.
-	fn new_test_ext() -> runtime_io::TestExternalities<Blake2Hasher> {
-		system::GenesisConfig::default().build_storage::<Test>().unwrap().into()
-	}
-
-	#[test]
-	fn it_works_for_default_value() {
-		with_externalities(&mut new_test_ext(), || {
-			// Just a dummy test for the dummy funtion `do_something`
-			// calling the `do_something` function with a value 42
-			assert_ok!(TemplateModule::do_something(Origin::signed(1), 42));
-			// asserting that the stored value is equal to what we stored
-			assert_eq!(TemplateModule::something(), Some(42));
-		});
-	}
-}
