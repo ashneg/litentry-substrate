@@ -10,7 +10,7 @@
 
 use support::{decl_module, decl_storage, decl_event, dispatch::Result, StorageMap, StorageValue, ensure, fail};
 use system::ensure_signed;
-use sr_primitives::traits::Hash;
+use sr_primitives::traits::{Hash, StaticLookup};
 //use parity_codec::{Encode, Decode, WrapperTypeDecode};
 use codec::{Encode, Decode};
 
@@ -127,7 +127,7 @@ decl_module! {
 
         fn create_authorized_token(
             origin,
-            to: T::AccountId,
+            to: <T::Lookup as StaticLookup>::Source,
             identity_id: T::Hash,
             cost: T::Balance,
             data: u64,
@@ -135,7 +135,7 @@ decl_module! {
             expired: u64) -> Result {
 
             let _sender = ensure_signed(origin)?;
-
+			let dest = T::Lookup::lookup(to)?;
             let nonce = Nonce::get();
             let id = (<system::Module<T>>::random_seed(), &_sender, nonce)
                 .using_encoded(<T as system::Trait>::Hashing::hash);
@@ -148,7 +148,7 @@ decl_module! {
                 expired
             };
 
-            Self::mint_token(to, identity_id, id, new_token)?;
+            Self::mint_token(dest, identity_id, id, new_token)?;
 
             Nonce::mutate(|n| *n += 1);
 
@@ -158,7 +158,7 @@ decl_module! {
 
         fn issue_token(
             origin,
-            to: T::AccountId,
+            to: <T::Lookup as StaticLookup>::Source,
             identity_id: T::Hash,
             cost: T::Balance,
             data: u64,
