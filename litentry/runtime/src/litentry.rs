@@ -33,7 +33,7 @@ pub struct Identity<THash> {
 pub struct AuthorizedToken<THash, TBalance> {
 	id: THash,
 	cost: TBalance,
-	data: u64,
+	data: Vec<u8>,
 	datatype: u64,
 	expired: u64,
 }
@@ -130,7 +130,7 @@ decl_module! {
             to: <T::Lookup as StaticLookup>::Source,
             identity_id: T::Hash,
             cost: T::Balance,
-            data: u64,
+            data: Vec<u8>,
             datatype:u64,
             expired: u64) -> Result {
 
@@ -161,7 +161,7 @@ decl_module! {
             to: <T::Lookup as StaticLookup>::Source,
             identity_id: T::Hash,
             cost: T::Balance,
-            data: u64,
+            data: Vec<u8>,
             datatype:u64,
             expired: u64) -> Result {
 
