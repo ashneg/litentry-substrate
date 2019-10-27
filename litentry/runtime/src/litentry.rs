@@ -136,6 +136,7 @@ decl_module! {
 
             let _sender = ensure_signed(origin)?;
             let dest = T::Lookup::lookup(to)?;
+            ensure!(data.len() == 46, "wrong ipfs hash length.");
             let nonce = Nonce::get();
             let id = (<system::Module<T>>::random_seed(), &_sender, nonce)
                 .using_encoded(<T as system::Trait>::Hashing::hash);
