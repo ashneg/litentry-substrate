@@ -6025,6 +6025,7 @@ dependencies = [
  "sp-version",
  "substrate-test-runtime-client",
  "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -6132,6 +6133,7 @@ dependencies = [
  "sp-runtime",
  "sp-state-machine",
  "substrate-test-runtime-client",
+ "tracing",
 ]
 
 [[package]]
