@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -22,7 +22,7 @@ use sp_std::iter::once;
 
 /// A node header
 #[derive(Copy, Clone, PartialEq, Eq)]
-#[derive(primitives::RuntimeDebug)]
+#[derive(sp_core::RuntimeDebug)]
 pub(crate) enum NodeHeader {
 	Null,
 	Branch(bool, usize),
@@ -69,7 +69,7 @@ impl Decode for NodeHeader {
 }
 
 /// Returns an iterator over encoded bytes for node header and size.
-/// Size encoding allows unlimited, length unefficient, representation, but
+/// Size encoding allows unlimited, length inefficient, representation, but
 /// is bounded to 16 bit maximum value to avoid possible DOS.
 pub(crate) fn size_and_prefix_iterator(size: usize, prefix: u8) -> impl Iterator<Item = u8> {
 	let size = sp_std::cmp::min(trie_constants::NIBBLE_SIZE_BOUND, size);

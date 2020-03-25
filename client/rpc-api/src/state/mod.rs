@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -22,9 +22,9 @@ use jsonrpc_core::Result as RpcResult;
 use jsonrpc_core::futures::Future;
 use jsonrpc_derive::rpc;
 use jsonrpc_pubsub::{typed::Subscriber, SubscriptionId};
-use primitives::Bytes;
-use primitives::storage::{StorageKey, StorageData, StorageChangeSet};
-use runtime_version::RuntimeVersion;
+use sp_core::Bytes;
+use sp_core::storage::{StorageKey, StorageData, StorageChangeSet};
+use sp_version::RuntimeVersion;
 use self::error::FutureResult;
 
 pub use self::gen_client::Client as StateClient;
@@ -39,9 +39,26 @@ pub trait StateApi<Hash> {
 	#[rpc(name = "state_call", alias("state_callAt"))]
 	fn call(&self, name: String, bytes: Bytes, hash: Option<Hash>) -> FutureResult<Bytes>;
 
-	/// Returns the keys with prefix, leave empty to get all the keys
+	/// DEPRECATED: Please use `state_getKeysPaged` with proper paging support.
+	/// Returns the keys with prefix, leave empty to get all the keys.
 	#[rpc(name = "state_getKeys")]
 	fn storage_keys(&self, prefix: StorageKey, hash: Option<Hash>) -> FutureResult<Vec<StorageKey>>;
+
+	/// Returns the keys with prefix, leave empty to get all the keys
+	#[rpc(name = "state_getPairs")]
+	fn storage_pairs(&self, prefix: StorageKey, hash: Option<Hash>) -> FutureResult<Vec<(StorageKey, StorageData)>>;
+
+	/// Returns the keys with prefix with pagination support.
+	/// Up to `count` keys will be returned.
+	/// If `start_key` is passed, return next keys in storage in lexicographic order.
+	#[rpc(name = "state_getKeysPaged", alias("state_getKeysPagedAt"))]
+	fn storage_keys_paged(
+		&self,
+		prefix: Option<StorageKey>,
+		count: u32,
+		start_key: Option<StorageKey>,
+		hash: Option<Hash>,
+	) -> FutureResult<Vec<StorageKey>>;
 
 	/// Returns a storage entry at a specific block's state.
 	#[rpc(name = "state_getStorage", alias("state_getStorageAt"))]
@@ -60,6 +77,8 @@ pub trait StateApi<Hash> {
 	fn child_storage_keys(
 		&self,
 		child_storage_key: StorageKey,
+		child_info: StorageKey,
+		child_type: u32,
 		prefix: StorageKey,
 		hash: Option<Hash>
 	) -> FutureResult<Vec<StorageKey>>;
@@ -69,6 +88,8 @@ pub trait StateApi<Hash> {
 	fn child_storage(
 		&self,
 		child_storage_key: StorageKey,
+		child_info: StorageKey,
+		child_type: u32,
 		key: StorageKey,
 		hash: Option<Hash>
 	) -> FutureResult<Option<StorageData>>;
@@ -78,6 +99,8 @@ pub trait StateApi<Hash> {
 	fn child_storage_hash(
 		&self,
 		child_storage_key: StorageKey,
+		child_info: StorageKey,
+		child_type: u32,
 		key: StorageKey,
 		hash: Option<Hash>
 	) -> FutureResult<Option<Hash>>;
@@ -87,6 +110,8 @@ pub trait StateApi<Hash> {
 	fn child_storage_size(
 		&self,
 		child_storage_key: StorageKey,
+		child_info: StorageKey,
+		child_type: u32,
 		key: StorageKey,
 		hash: Option<Hash>
 	) -> FutureResult<Option<u64>>;

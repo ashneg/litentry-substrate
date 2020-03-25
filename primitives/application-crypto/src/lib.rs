@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -21,11 +21,11 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 #[doc(hidden)]
-pub use primitives::{self, crypto::{CryptoType, Public, Derive, IsWrappedBy, Wraps}, RuntimeDebug};
+pub use sp_core::{self, crypto::{CryptoType, Public, Derive, IsWrappedBy, Wraps}, RuntimeDebug};
 #[doc(hidden)]
 #[cfg(feature = "full_crypto")]
-pub use primitives::crypto::{SecretStringError, DeriveJunction, Ss58Codec, Pair};
-pub use primitives::{crypto::{KeyTypeId, key_types}};
+pub use sp_core::crypto::{SecretStringError, DeriveJunction, Ss58Codec, Pair};
+pub use sp_core::{crypto::{KeyTypeId, key_types}};
 
 #[doc(hidden)]
 pub use codec;
@@ -301,6 +301,10 @@ macro_rules! app_crypto_public_common {
 			fn verify<M: AsRef<[u8]>>(&self, msg: &M, signature: &Self::Signature) -> bool {
 				<$public as $crate::RuntimePublic>::verify(self.as_ref(), msg, &signature.as_ref())
 			}
+
+			fn to_raw_vec(&self) -> $crate::Vec<u8> {
+				<$public as $crate::RuntimePublic>::to_raw_vec(&self.0)
+			}
 		}
 	}
 }
@@ -431,4 +435,31 @@ macro_rules! wrap {
 			}
 		}
 	}
+}
+
+/// Generate the given code if the pair type is available.
+///
+/// The pair type is available when `feature = "std"` || `feature = "full_crypto"`.
+///
+/// # Example
+///
+/// ```
+/// sp_application_crypto::with_pair! {
+///     pub type Pair = ();
+/// }
+/// ```
+#[macro_export]
+#[cfg(any(feature = "std", feature = "full_crypto"))]
+macro_rules! with_pair {
+	( $( $def:tt )* ) => {
+		$( $def )*
+	}
+}
+
+
+#[doc(hidden)]
+#[macro_export]
+#[cfg(all(not(feature = "std"), not(feature = "full_crypto")))]
+macro_rules! with_pair {
+	( $( $def:tt )* ) => {}
 }

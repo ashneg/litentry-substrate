@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -16,13 +16,27 @@
 
 //! Tagged Transaction Queue Runtime API.
 
-use sp_runtime::transaction_validity::TransactionValidity;
+use sp_runtime::transaction_validity::{TransactionValidity, TransactionSource};
 use sp_runtime::traits::Block as BlockT;
 
 sp_api::decl_runtime_apis! {
 	/// The `TaggedTransactionQueue` api trait for interfering with the transaction queue.
+	#[api_version(2)]
 	pub trait TaggedTransactionQueue {
-		/// Validate the given transaction.
+		/// Validate the transaction.
+		#[changed_in(2)]
 		fn validate_transaction(tx: <Block as BlockT>::Extrinsic) -> TransactionValidity;
+
+		/// Validate the transaction.
+		///
+		/// This method is invoked by the transaction pool to learn details about given transaction.
+		/// The implementation should make sure to verify the correctness of the transaction
+		/// against current state.
+		/// Note that this call may be performed by the pool multiple times and transactions
+		/// might be verified in any possible order.
+		fn validate_transaction(
+			source: TransactionSource,
+			tx: <Block as BlockT>::Extrinsic,
+		) -> TransactionValidity;
 	}
 }

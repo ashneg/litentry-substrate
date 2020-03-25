@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -16,18 +16,19 @@
 
 //! Testing block import logic.
 
-use consensus::ImportedAux;
-use consensus::import_queue::{
+use sp_consensus::ImportedAux;
+use sp_consensus::import_queue::{
 	import_single_block, BasicQueue, BlockImportError, BlockImportResult, IncomingBlock,
 };
-use test_client::{self, prelude::*};
-use test_client::runtime::{Block, Hash};
+use substrate_test_runtime_client::{self, prelude::*};
+use substrate_test_runtime_client::runtime::{Block, Hash};
 use sp_runtime::generic::BlockId;
+use sc_block_builder::BlockBuilderProvider;
 use super::*;
 
 fn prepare_good_block() -> (TestClient, Hash, u64, PeerId, IncomingBlock<Block>) {
-	let client = test_client::new();
-	let block = client.new_block(Default::default()).unwrap().bake().unwrap();
+	let mut client = substrate_test_runtime_client::new();
+	let block = client.new_block(Default::default()).unwrap().build().unwrap().block;
 	client.import(BlockOrigin::File, block).unwrap();
 
 	let (hash, number) = (client.block_hash(1).unwrap().unwrap(), 1);
@@ -52,7 +53,7 @@ fn import_single_good_block_works() {
 	let mut expected_aux = ImportedAux::default();
 	expected_aux.is_new_best = true;
 
-	match import_single_block(&mut test_client::new(), BlockOrigin::File, block, &mut PassThroughVerifier(true)) {
+	match import_single_block(&mut substrate_test_runtime_client::new(), BlockOrigin::File, block, &mut PassThroughVerifier(true)) {
 		Ok(BlockImportResult::ImportedUnknown(ref num, ref aux, ref org))
 			if *num == number && *aux == expected_aux && *org == Some(peer_id) => {}
 		r @ _ => panic!("{:?}", r)
@@ -72,7 +73,7 @@ fn import_single_good_known_block_is_ignored() {
 fn import_single_good_block_without_header_fails() {
 	let (_, _, _, peer_id, mut block) = prepare_good_block();
 	block.header = None;
-	match import_single_block(&mut test_client::new(), BlockOrigin::File, block, &mut PassThroughVerifier(true)) {
+	match import_single_block(&mut substrate_test_runtime_client::new(), BlockOrigin::File, block, &mut PassThroughVerifier(true)) {
 		Err(BlockImportError::IncompleteHeader(ref org)) if *org == Some(peer_id) => {}
 		_ => panic!()
 	}
@@ -83,7 +84,7 @@ fn async_import_queue_drops() {
 	// Perform this test multiple times since it exhibits non-deterministic behavior.
 	for _ in 0..100 {
 		let verifier = PassThroughVerifier(true);
-		let queue = BasicQueue::new(verifier, Box::new(test_client::new()), None, None);
+		let queue = BasicQueue::new(verifier, Box::new(substrate_test_runtime_client::new()), None, None);
 		drop(queue);
 	}
 }

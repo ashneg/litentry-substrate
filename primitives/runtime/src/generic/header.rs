@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -20,18 +20,19 @@
 use serde::{Deserialize, Serialize};
 use crate::codec::{Decode, Encode, Codec, Input, Output, HasCompact, EncodeAsRef, Error};
 use crate::traits::{
-	self, Member, SimpleArithmetic, SimpleBitOps, Hash as HashT,
+	self, Member, AtLeast32Bit, SimpleBitOps, Hash as HashT,
 	MaybeSerializeDeserialize, MaybeSerialize, MaybeDisplay,
+	MaybeMallocSizeOf,
 };
 use crate::generic::Digest;
-use primitives::U256;
+use sp_core::U256;
 use sp_std::{
 	convert::TryFrom,
 	fmt::Debug,
 };
 
 /// Abstraction over a block header for a substrate chain.
-#[derive(PartialEq, Eq, Clone, primitives::RuntimeDebug)]
+#[derive(PartialEq, Eq, Clone, sp_core::RuntimeDebug)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "std", serde(rename_all = "camelCase"))]
 #[cfg_attr(feature = "std", serde(deny_unknown_fields))]
@@ -49,6 +50,22 @@ pub struct Header<Number: Copy + Into<U256> + TryFrom<U256>, Hash: HashT> {
 	pub extrinsics_root: Hash::Output,
 	/// A chain-specific digest of data useful for light clients or referencing auxiliary data.
 	pub digest: Digest<Hash::Output>,
+}
+
+#[cfg(feature = "std")]
+impl<Number, Hash> parity_util_mem::MallocSizeOf for Header<Number, Hash>
+where
+	Number: Copy + Into<U256> + TryFrom<U256> + parity_util_mem::MallocSizeOf,
+	Hash: HashT,
+	Hash::Output: parity_util_mem::MallocSizeOf,
+{
+	fn size_of(&self, ops: &mut parity_util_mem::MallocSizeOfOps) -> usize {
+		self.parent_hash.size_of(ops) +
+			self.number.size_of(ops) +
+			self.state_root.size_of(ops) +
+			self.extrinsics_root.size_of(ops) +
+			self.digest.size_of(ops)
+	}
 }
 
 #[cfg(feature = "std")]
@@ -105,10 +122,11 @@ impl<Number, Hash> codec::EncodeLike for Header<Number, Hash> where
 
 impl<Number, Hash> traits::Header for Header<Number, Hash> where
 	Number: Member + MaybeSerializeDeserialize + Debug + sp_std::hash::Hash + MaybeDisplay +
-		SimpleArithmetic + Codec + Copy + Into<U256> + TryFrom<U256>,
+		AtLeast32Bit + Codec + Copy + Into<U256> + TryFrom<U256> + sp_std::str::FromStr +
+		MaybeMallocSizeOf,
 	Hash: HashT,
-	Hash::Output: Default + sp_std::hash::Hash + Copy + Member +
-		MaybeSerialize + Debug + MaybeDisplay + SimpleBitOps + Codec,
+	Hash::Output: Default + sp_std::hash::Hash + Copy + Member + Ord +
+		MaybeSerialize + Debug + MaybeDisplay + SimpleBitOps + Codec + MaybeMallocSizeOf,
 {
 	type Number = Number;
 	type Hash = <Hash as HashT>::Output;
@@ -152,7 +170,7 @@ impl<Number, Hash> traits::Header for Header<Number, Hash> where
 }
 
 impl<Number, Hash> Header<Number, Hash> where
-	Number: Member + sp_std::hash::Hash + Copy + MaybeDisplay + SimpleArithmetic + Codec + Into<U256> + TryFrom<U256>,
+	Number: Member + sp_std::hash::Hash + Copy + MaybeDisplay + AtLeast32Bit + Codec + Into<U256> + TryFrom<U256>,
 	Hash: HashT,
 	Hash::Output: Default + sp_std::hash::Hash + Copy + Member + MaybeDisplay + SimpleBitOps + Codec,
  {

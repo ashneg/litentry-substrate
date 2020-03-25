@@ -1,4 +1,4 @@
-// Copyright 2018-2019 Parity Technologies (UK) Ltd.
+// Copyright 2018-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -15,7 +15,7 @@
 // along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
 
 use super::{PublicOf, PublicT, Crypto};
-use primitives::Pair;
+use sp_core::Pair;
 use rand::{rngs::OsRng, RngCore};
 
 fn good_waypoint(done: u64) -> u64 {
@@ -62,14 +62,25 @@ fn calculate_score(_desired: &str, key: &str) -> usize {
 	0
 }
 
-pub(super) fn generate_key<C: Crypto>(desired: &str) -> Result<KeyPair<C>, &str> where
+/// Validate whether the char is allowed to be used in base58.
+/// num 0, lower l, upper I and O are not allowed.
+fn validate_base58(c :char) -> bool {
+	c.is_alphanumeric() && !"0lIO".contains(c)
+}
+
+pub(super) fn generate_key<C: Crypto>(desired: &str) -> Result<KeyPair<C>, &'static str> where
 		PublicOf<C>: PublicT,
 {
 	if desired.is_empty() {
 		return Err("Pattern must not be empty");
 	}
 
-	println!("Generating key containing pattern '{}'", desired);
+	if !desired.chars().all(validate_base58) {
+		return Err("Pattern can only contains valid characters in base58 \
+			(all alphanumeric except for 0, l, I and O)");
+	}
+
+	eprintln!("Generating key containing pattern '{}'", desired);
 
 	let top = 45 + (desired.len() * 48);
 	let mut best = 0;
@@ -94,14 +105,14 @@ pub(super) fn generate_key<C: Crypto>(desired: &str) -> Result<KeyPair<C>, &str>
 				score: score,
 			};
 			if best >= top {
-				println!("best: {} == top: {}", best, top);
+				eprintln!("best: {} == top: {}", best, top);
 				return Ok(keypair);
 			}
 		}
 		done += 1;
 
 		if done % good_waypoint(done) == 0 {
-			println!("{} keys searched; best is {}/{} complete", done, best, top);
+			eprintln!("{} keys searched; best is {}/{} complete", done, best, top);
 		}
 	}
 }
@@ -110,7 +121,7 @@ pub(super) fn generate_key<C: Crypto>(desired: &str) -> Result<KeyPair<C>, &str>
 mod tests {
 	use super::super::Ed25519;
 	use super::*;
-	use primitives::{crypto::Ss58Codec, Pair};
+	use sp_core::{crypto::Ss58Codec, Pair};
 	#[cfg(feature = "bench")]
 	use test::Bencher;
 
@@ -160,6 +171,22 @@ mod tests {
 			),
 			0
 		);
+	}
+
+	#[test]
+	fn test_invalid_pattern() {
+		assert!(generate_key::<Ed25519>("").is_err());
+		assert!(generate_key::<Ed25519>("0").is_err());
+		assert!(generate_key::<Ed25519>("l").is_err());
+		assert!(generate_key::<Ed25519>("I").is_err());
+		assert!(generate_key::<Ed25519>("O").is_err());
+		assert!(generate_key::<Ed25519>("!").is_err());
+	}
+
+	#[test]
+	fn test_valid_pattern() {
+		assert!(generate_key::<Ed25519>("o").is_ok());
+		assert!(generate_key::<Ed25519>("L").is_ok());
 	}
 
 	#[cfg(feature = "bench")]

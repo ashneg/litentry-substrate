@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -101,6 +101,10 @@ pub fn get_raw(key: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Put a raw byte slice into storage.
+///
+/// **WARNING**: If you set the storage of the Substrate Wasm (`well_known_keys::CODE`),
+/// you should also call `frame_system::RuntimeUpgraded::put(true)` to trigger the
+/// `on_runtime_upgrade` logic.
 pub fn put_raw(key: &[u8], value: &[u8]) {
 	sp_io::storage::set(key, value)
 }

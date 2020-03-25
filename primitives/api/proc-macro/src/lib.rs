@@ -1,4 +1,4 @@
-// Copyright 2018-2019 Parity Technologies (UK) Ltd.
+// Copyright 2018-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -17,7 +17,6 @@
 //! Macros for declaring and implementing runtime apis.
 
 #![recursion_limit = "512"]
-extern crate proc_macro;
 
 use proc_macro::TokenStream;
 

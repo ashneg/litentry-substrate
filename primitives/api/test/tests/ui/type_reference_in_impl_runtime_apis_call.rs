@@ -1,5 +1,5 @@
 use sp_runtime::traits::{GetNodeBlockType, Block as BlockT};
-use test_client::runtime::Block;
+use substrate_test_runtime_client::runtime::Block;
 
 /// The declaration of the `Runtime` type and the implementation of the `GetNodeBlockType`
 /// trait are done by the `construct_runtime!` macro in a real runtime.
@@ -22,7 +22,7 @@ sp_api::impl_runtime_apis! {
 	}
 
 	impl sp_api::Core<Block> for Runtime {
-		fn version() -> runtime_api::RuntimeVersion {
+		fn version() -> sp_api::RuntimeVersion {
 			unimplemented!()
 		}
 		fn execute_block(_: Block) {

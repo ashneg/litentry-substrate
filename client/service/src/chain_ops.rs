@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -19,57 +19,52 @@
 use crate::error;
 use crate::builder::{ServiceBuilderCommand, ServiceBuilder};
 use crate::error::Error;
-use chain_spec::{ChainSpec, RuntimeGenesis, Extension};
+use sc_chain_spec::ChainSpec;
 use log::{warn, info};
 use futures::{future, prelude::*};
-use futures03::{
-	TryFutureExt as _,
-};
-use primitives::{Blake2Hasher, Hasher};
 use sp_runtime::traits::{
 	Block as BlockT, NumberFor, One, Zero, Header, SaturatedConversion
 };
 use sp_runtime::generic::{BlockId, SignedBlock};
 use codec::{Decode, Encode, IoReader};
-use client::Client;
-use consensus_common::import_queue::{IncomingBlock, Link, BlockImportError, BlockImportResult, ImportQueue};
-use consensus_common::BlockOrigin;
-
-use std::{
-	io::{Read, Write, Seek},
+use sc_client::{Client, LocalCallExecutor};
+use sp_consensus::{
+	BlockOrigin,
+	import_queue::{IncomingBlock, Link, BlockImportError, BlockImportResult, ImportQueue},
 };
+use sc_executor::{NativeExecutor, NativeExecutionDispatch};
 
-use network::message;
+use std::{io::{Read, Write, Seek}, pin::Pin};
+use sc_client_api::BlockBackend;
 
 /// Build a chain spec json
-pub fn build_spec<G, E>(spec: ChainSpec<G, E>, raw: bool) -> error::Result<String> where
-	G: RuntimeGenesis,
-	E: Extension,
-{
-	Ok(spec.to_json(raw)?)
+pub fn build_spec(spec: &dyn ChainSpec, raw: bool) -> error::Result<String> {
+	Ok(spec.as_json(raw)?)
 }
 
 impl<
-	TBl, TRtApi, TCfg, TGen, TCSExt, TBackend,
-	TExec, TFchr, TSc, TImpQu, TFprb, TFpp, TNetP,
+	TBl, TRtApi, TBackend,
+	TExecDisp, TFchr, TSc, TImpQu, TFprb, TFpp,
 	TExPool, TRpc, Backend
 > ServiceBuilderCommand for ServiceBuilder<
-	TBl, TRtApi, TCfg, TGen, TCSExt, Client<TBackend, TExec, TBl, TRtApi>,
-	TFchr, TSc, TImpQu, TFprb, TFpp, TNetP, TExPool, TRpc, Backend
+	TBl, TRtApi,
+	Client<TBackend, LocalCallExecutor<TBackend, NativeExecutor<TExecDisp>>, TBl, TRtApi>,
+	TFchr, TSc, TImpQu, TFprb, TFpp, TExPool, TRpc, Backend
 > where
-	TBl: BlockT<Hash = <Blake2Hasher as Hasher>::Out>,
-	TBackend: 'static + client_api::backend::Backend<TBl, Blake2Hasher> + Send,
-	TExec: 'static + client::CallExecutor<TBl, Blake2Hasher> + Send + Sync + Clone,
+	TBl: BlockT,
+	TBackend: 'static + sc_client_api::backend::Backend<TBl> + Send,
+	TExecDisp: 'static + NativeExecutionDispatch,
 	TImpQu: 'static + ImportQueue<TBl>,
 	TRtApi: 'static + Send + Sync,
 {
 	type Block = TBl;
+	type NativeDispatch = TExecDisp;
 
 	fn import_blocks(
 		self,
 		input: impl Read + Seek + Send + 'static,
 		force: bool,
-	) -> Box<dyn Future<Item = (), Error = Error> + Send> {
+	) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send>> {
 		struct WaitLink {
 			imported_blocks: u64,
 			has_error: bool,
@@ -118,7 +113,7 @@ impl<
 		// queue, the `Future` re-schedules itself and returns `Poll::Pending`.
 		// This makes it possible either to interleave other operations in-between the block imports,
 		// or to stop the operation completely.
-		let import = futures03::future::poll_fn(move |cx| {
+		let import = future::poll_fn(move |cx| {
 			// Start by reading the number of blocks if not done so already.
 			let count = match count {
 				Some(c) => c,
@@ -142,21 +137,13 @@ impl<
 					Ok(signed) => {
 						let (header, extrinsics) = signed.block.deconstruct();
 						let hash = header.hash();
-						let block  = message::BlockData::<Self::Block> {
-							hash,
-							justification: signed.justification,
-							header: Some(header),
-							body: Some(extrinsics),
-							receipt: None,
-							message_queue: None
-						};
 						// import queue handles verification and importing it into the client
 						queue.import_blocks(BlockOrigin::File, vec![
 							IncomingBlock::<Self::Block> {
-								hash: block.hash,
-								header: block.header,
-								body: block.body,
-								justification: block.justification,
+								hash,
+								header: Some(header),
+								body: Some(extrinsics),
+								justification: signed.justification,
 								origin: None,
 								allow_missing_state: false,
 								import_existing: force,
@@ -198,7 +185,7 @@ impl<
 			}
 
 			if link.imported_blocks >= count {
-				info!("Imported {} blocks. Best: #{}", read_block_count, client.info().chain.best_number);
+				info!("Imported {} blocks. Best: #{}", read_block_count, client.chain_info().best_number);
 				return std::task::Poll::Ready(Ok(()));
 
 			} else {
@@ -206,7 +193,7 @@ impl<
 				return std::task::Poll::Pending;
 			}
 		});
-		Box::new(import.compat())
+		Box::pin(import)
 	}
 
 	fn export_blocks(
@@ -214,15 +201,15 @@ impl<
 		mut output: impl Write + 'static,
 		from: NumberFor<TBl>,
 		to: Option<NumberFor<TBl>>,
-		json: bool
-	) -> Box<dyn Future<Item = (), Error = Error>> {
+		binary: bool
+	) -> Pin<Box<dyn Future<Output = Result<(), Error>>>> {
 		let client = self.client;
 		let mut block = from;
 
 		let last = match to {
 			Some(v) if v.is_zero() => One::one(),
 			Some(v) => v,
-			None => client.info().chain.best_number,
+			None => client.chain_info().best_number,
 		};
 
 		let mut wrote_header = false;
@@ -234,14 +221,14 @@ impl<
 		// `Poll::Pending`.
 		// This makes it possible either to interleave other operations in-between the block exports,
 		// or to stop the operation completely.
-		let export = futures03::future::poll_fn(move |cx| {
+		let export = future::poll_fn(move |cx| {
 			if last < block {
 				return std::task::Poll::Ready(Err("Invalid block range specified".into()));
 			}
 
 			if !wrote_header {
 				info!("Exporting blocks from #{} to #{}", block, last);
-				if !json {
+				if binary {
 					let last_: u64 = last.saturated_into::<u64>();
 					let block_: u64 = block.saturated_into::<u64>();
 					let len: u64 = last_ - block_ + 1;
@@ -252,13 +239,13 @@ impl<
 
 			match client.block(&BlockId::number(block))? {
 				Some(block) => {
-					if json {
+					if binary {
+						output.write_all(&block.encode())?;
+					} else {
 						serde_json::to_writer(&mut output, &block)
 							.map_err(|e| format!("Error writing JSON: {}", e))?;
-						} else {
-							output.write_all(&block.encode())?;
 					}
-				},
+			},
 				// Reached end of the chain.
 				None => return std::task::Poll::Ready(Ok(())),
 			}
@@ -275,7 +262,7 @@ impl<
 			std::task::Poll::Pending
 		});
 
-		Box::new(export.compat())
+		Box::pin(export)
 	}
 
 	fn revert_chain(
@@ -283,7 +270,7 @@ impl<
 		blocks: NumberFor<TBl>
 	) -> Result<(), Error> {
 		let reverted = self.client.revert(blocks)?;
-		let info = self.client.info().chain;
+		let info = self.client.chain_info();
 
 		if reverted.is_zero() {
 			info!("There aren't any non-finalized blocks to revert.");
@@ -296,7 +283,7 @@ impl<
 	fn check_block(
 		self,
 		block_id: BlockId<TBl>
-	) -> Box<dyn Future<Item = (), Error = Error> + Send> {
+	) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send>> {
 		match self.client.block(&block_id) {
 			Ok(Some(block)) => {
 				let mut buf = Vec::new();
@@ -305,9 +292,8 @@ impl<
 				let reader = std::io::Cursor::new(buf);
 				self.import_blocks(reader, true)
 			}
-			Ok(None) => Box::new(future::err("Unknown block".into())),
-			Err(e) => Box::new(future::err(format!("Error reading block: {:?}", e).into())),
+			Ok(None) => Box::pin(future::err("Unknown block".into())),
+			Err(e) => Box::pin(future::err(format!("Error reading block: {:?}", e).into())),
 		}
 	}
 }
-

@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -51,8 +51,8 @@ use sp_std::str;
 use sp_std::prelude::Vec;
 #[cfg(not(feature = "std"))]
 use sp_std::prelude::vec;
-use primitives::RuntimeDebug;
-use primitives::offchain::{
+use sp_core::RuntimeDebug;
+use sp_core::offchain::{
 	Timestamp,
 	HttpRequestId as RequestId,
 	HttpRequestStatus as RequestStatus,
@@ -176,7 +176,7 @@ impl<'a, T> Request<'a, T> {
 }
 
 impl<'a, T: Default> Request<'a, T> {
-	/// Create new Request builder with given URL and body.
+	/// Create a new Request builder with the given URL.
 	pub fn new(url: &'a str) -> Self {
 		Request::default().url(url)
 	}
@@ -241,7 +241,7 @@ impl<'a, I: AsRef<[u8]>, T: IntoIterator<Item=I>> Request<'a, T> {
 			sp_io::offchain::http_request_write_body(id, chunk.as_ref(), self.deadline)?;
 		}
 
-		// finalise the request
+		// finalize the request
 		sp_io::offchain::http_request_write_body(id, &[], self.deadline)?;
 
 		Ok(PendingRequest {
@@ -257,7 +257,7 @@ pub enum Error {
 	DeadlineReached,
 	/// Request had timed out.
 	IoError,
-	/// Unknown error has been ecountered.
+	/// Unknown error has been encountered.
 	Unknown,
 }
 
@@ -516,7 +516,7 @@ impl<'a> HeadersIterator<'a> {
 mod tests {
 	use super::*;
 	use sp_io::TestExternalities;
-	use primitives::offchain::{
+	use sp_core::offchain::{
 		OffchainExt,
 		testing,
 	};

@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -25,10 +25,10 @@
 //! # Using a type in a runtime interface
 //!
 //! Any type that should be used in a runtime interface as argument or return value needs to
-//! implement [`RIType`]. The associated type `FFIType` is the type that is used in the FFI
-//! function to represent the actual type. For example `[T]` is represented by an `u64`. The slice
-//! pointer and the length will be mapped to an `u64` value. For more information, see the
-//! implementation of [`RIType`] for [`T`]. The FFI function definition is used when calling from
+//! implement [`RIType`]. The associated type [`FFIType`](RIType::FFIType) is the type that is used
+//! in the FFI function to represent the actual type. For example `[T]` is represented by an `u64`.
+//! The slice pointer and the length will be mapped to an `u64` value. For more information see
+//! this [table](#ffi-type-and-conversion). The FFI function definition is used when calling from
 //! the wasm runtime into the node.
 //!
 //! Traits are used to convert from a type to the corresponding [`RIType::FFIType`].
@@ -69,6 +69,37 @@
 //!
 //! For more information on declaring a runtime interface, see
 //! [`#[runtime_interface]`](attr.runtime_interface.html).
+//!
+//! # FFI type and conversion
+//!
+//! The following table documents how values of types are passed between the wasm and
+//! the host side and how they are converted into the corresponding type.
+//!
+//! | Type | FFI type | Conversion |
+//! |----|----|----|
+//! | `u8` | `u8` | `Identity` |
+//! | `u16` | `u16` | `Identity` |
+//! | `u32` | `u32` | `Identity` |
+//! | `u64` | `u64` | `Identity` |
+//! | `i128` | `u32` | `v.as_ptr()` (pointer to a 16 byte array) |
+//! | `i8` | `i8` | `Identity` |
+//! | `i16` | `i16` | `Identity` |
+//! | `i32` | `i32` | `Identity` |
+//! | `i64` | `i64` | `Identity` |
+//! | `u128` | `u32` | `v.as_ptr()` (pointer to a 16 byte array) |
+//! | `bool` | `u8` | `if v { 1 } else { 0 }` |
+//! | `&str` | `u64` | <code>v.len() 32bit << 32 &#124; v.as_ptr() 32bit</code> |
+//! | `&[u8]` | `u64` | <code>v.len() 32bit << 32 &#124; v.as_ptr() 32bit</code> |
+//! | `Vec<u8>` | `u64` | <code>v.len() 32bit << 32 &#124; v.as_ptr() 32bit</code> |
+//! | `Vec<T> where T: Encode` | `u64` | `let e = v.encode();`<br><br><code>e.len() 32bit << 32 &#124; e.as_ptr() 32bit</code> |
+//! | `&[T] where T: Encode` | `u64` | `let e = v.encode();`<br><br><code>e.len() 32bit << 32 &#124; e.as_ptr() 32bit</code> |
+//! | `[u8; N]` | `u32` | `v.as_ptr()` |
+//! | `*const T` | `u32` | `Identity` |
+//! | `Option<T>` | `u64` | `let e = v.encode();`<br><br><code>e.len() 32bit << 32 &#124; e.as_ptr() 32bit</code> |
+//! | [`T where T: PassBy<PassBy=Inner>`](pass_by::Inner) | Depends on inner | Depends on inner |
+//! | [`T where T: PassBy<PassBy=Codec>`](pass_by::Codec) | `u64`| <code>v.len() 32bit << 32 &#124; v.as_ptr() 32bit</code> |
+//!
+//! `Identity` means that the value is converted directly into the corresponding FFI type.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -76,7 +107,7 @@ extern crate self as sp_runtime_interface;
 
 #[doc(hidden)]
 #[cfg(feature = "std")]
-pub use wasm_interface;
+pub use sp_wasm_interface;
 
 #[doc(hidden)]
 pub use sp_std;
@@ -98,10 +129,21 @@ pub use sp_std;
 ///     /// A function that can be called from native/wasm.
 ///     ///
 ///     /// The implementation given to this function is only compiled on native.
-///     fn call_some_complex_code(data: &[u8]) -> Vec<u8> {
+///     fn call(data: &[u8]) -> Vec<u8> {
 ///         // Here you could call some rather complex code that only compiles on native or
 ///         // is way faster in native than executing it in wasm.
 ///         Vec::new()
+///     }
+///     /// Call function, but different version.
+///     ///
+///     /// For new runtimes, only function with latest version is reachable.
+///     /// But old version (above) is still accessible for old runtimes.
+///     /// Default version is 1.
+///     #[version(2)]
+///     fn call(data: &[u8]) -> Vec<u8> {
+///         // Here you could call some rather complex code that only compiles on native or
+///         // is way faster in native than executing it in wasm.
+///         [17].to_vec()
 ///     }
 ///
 ///     /// A function can take a `&self` or `&mut self` argument to get access to the
@@ -126,13 +168,15 @@ pub use sp_std;
 /// // on the visibility of the trait declaration.
 /// mod interface {
 ///     trait Interface {
-///         fn call_some_complex_code(data: &[u8]) -> Vec<u8>;
-///         fn set_or_clear(&mut self, optional: Option<Vec<u8>>);
+///         fn call_version_1(data: &[u8]) -> Vec<u8>;
+///         fn call_version_2(data: &[u8]) -> Vec<u8>;
+///         fn set_or_clear_version_1(&mut self, optional: Option<Vec<u8>>);
 ///     }
 ///
-///     impl Interface for &mut dyn externalities::Externalities {
-///         fn call_some_complex_code(data: &[u8]) -> Vec<u8> { Vec::new() }
-///         fn set_or_clear(&mut self, optional: Option<Vec<u8>>) {
+///     impl Interface for &mut dyn sp_externalities::Externalities {
+///         fn call_version_1(data: &[u8]) -> Vec<u8> { Vec::new() }
+///         fn call_version_2(data: &[u8]) -> Vec<u8> { [17].to_vec() }
+///         fn set_or_clear_version_1(&mut self, optional: Option<Vec<u8>>) {
 ///             match optional {
 ///                 Some(value) => self.set_storage([1, 2, 3, 4].to_vec(), value),
 ///                 None => self.clear_storage(&[1, 2, 3, 4]),
@@ -140,12 +184,25 @@ pub use sp_std;
 ///         }
 ///     }
 ///
-///     pub fn call_some_complex_code(data: &[u8]) -> Vec<u8> {
-///         <&mut dyn externalities::Externalities as Interface>::call_some_complex_code(data)
+///     pub fn call(data: &[u8]) -> Vec<u8> {
+///         // only latest version is exposed
+///         call_version_2(data)
+///     }
+///
+///     fn call_version_1(data: &[u8]) -> Vec<u8> {
+///         <&mut dyn sp_externalities::Externalities as Interface>::call_version_1(data)
+///     }
+///
+///     fn call_version_2(data: &[u8]) -> Vec<u8> {
+///         <&mut dyn sp_externalities::Externalities as Interface>::call_version_2(data)
 ///     }
 ///
 ///     pub fn set_or_clear(optional: Option<Vec<u8>>) {
-///         externalities::with_externalities(|mut ext| Interface::set_or_clear(&mut ext, optional))
+///         set_or_clear_version_1(optional)
+///     }
+///
+///     fn set_or_clear_version_1(optional: Option<Vec<u8>>) {
+///         sp_externalities::with_externalities(|mut ext| Interface::set_or_clear_version_1(&mut ext, optional))
 ///             .expect("`set_or_clear` called outside of an Externalities-provided environment.")
 ///     }
 ///
@@ -174,7 +231,7 @@ pub use sp_std;
 ///             /// `<ARGUMENT_TYPE as RIType>::FFIType`.
 ///             ///
 ///             /// `data` holds the pointer and the length to the `[u8]` slice.
-///             pub fn ext_Interface_call_some_complex_code_version_1(data: u64) -> u64;
+///             pub fn ext_Interface_call_version_1(data: u64) -> u64;
 ///             /// `optional` holds the pointer and the length of the encoded value.
 ///             pub fn ext_Interface_set_or_clear_version_1(optional: u64);
 ///         }
@@ -182,18 +239,18 @@ pub use sp_std;
 ///
 ///     /// The type is actually `ExchangeableFunction` (from `sp-runtime-interface`).
 ///     ///
-///     /// This can be used to replace the implementation of the `call_some_complex_code` function.
+///     /// This can be used to replace the implementation of the `call` function.
 ///     /// Instead of calling into the host, the callee will automatically call the other
 ///     /// implementation.
 ///     ///
 ///     /// To replace the implementation:
 ///     ///
-///     /// `host_call_some_complex_code.replace_implementation(some_other_impl)`
-///     pub static host_call_some_complex_code: () = ();
+///     /// `host_call.replace_implementation(some_other_impl)`
+///     pub static host_call: () = ();
 ///     pub static host_set_or_clear: () = ();
 ///
-///     pub fn call_some_complex_code(data: &[u8]) -> Vec<u8> {
-///         // This is the actual call: `host_call_some_complex_code.get()(data)`
+///     pub fn call(data: &[u8]) -> Vec<u8> {
+///         // This is the actual call: `host_call.get()(data)`
 ///         //
 ///         // But that does not work for several reasons in this example, so we just return an
 ///         // empty vector.
@@ -227,7 +284,7 @@ pub use sp_runtime_interface_proc_macro::runtime_interface;
 
 #[doc(hidden)]
 #[cfg(feature = "std")]
-pub use externalities::{
+pub use sp_externalities::{
 	set_and_run_with_externalities, with_externalities, Externalities, ExternalitiesExt, ExtensionStore,
 };
 
@@ -237,9 +294,13 @@ pub use codec;
 pub(crate) mod impls;
 #[cfg(feature = "std")]
 pub mod host;
-#[cfg(not(feature = "std"))]
+#[cfg(any(not(feature = "std"), doc))]
 pub mod wasm;
 pub mod pass_by;
+
+mod util;
+
+pub use util::unpack_ptr_and_len;
 
 /// Something that can be used by the runtime interface as type to communicate between wasm and the
 /// host.
@@ -249,7 +310,7 @@ pub mod pass_by;
 pub trait RIType {
 	/// The ffi type that is used to represent `Self`.
 	#[cfg(feature = "std")]
-	type FFIType: wasm_interface::IntoValue + wasm_interface::TryFromValue;
+	type FFIType: sp_wasm_interface::IntoValue + sp_wasm_interface::TryFromValue;
 	#[cfg(not(feature = "std"))]
 	type FFIType;
 }
@@ -260,4 +321,4 @@ pub type Pointer<T> = *mut T;
 
 /// A pointer that can be used in a runtime interface function signature.
 #[cfg(feature = "std")]
-pub type Pointer<T> = wasm_interface::Pointer<T>;
+pub type Pointer<T> = sp_wasm_interface::Pointer<T>;

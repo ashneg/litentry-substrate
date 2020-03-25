@@ -1,4 +1,4 @@
-// Copyright 2018-2019 Parity Technologies (UK) Ltd.
+// Copyright 2018-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -20,7 +20,7 @@ pub fn internal<E: ::std::fmt::Debug>(e: E) -> jsonrpc_core::Error {
 	warn!("Unknown error: {:?}", e);
 	jsonrpc_core::Error {
 		code: jsonrpc_core::ErrorCode::InternalError,
-		message: "Unknown error occured".into(),
+		message: "Unknown error occurred".into(),
 		data: Some(format!("{:?}", e).into()),
 	}
 }

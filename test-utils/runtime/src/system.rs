@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -20,12 +20,12 @@
 use sp_std::prelude::*;
 use sp_io::{
 	storage::root as storage_root, storage::changes_root as storage_changes_root,
-	hashing::blake2_256,
+	hashing::blake2_256, trie,
 };
-use runtime_support::storage;
-use runtime_support::{decl_storage, decl_module};
+use frame_support::storage;
+use frame_support::{decl_storage, decl_module};
 use sp_runtime::{
-	traits::{Hash as HashT, BlakeTwo256, Header as _}, generic, ApplyExtrinsicResult,
+	traits::Header as _, generic, ApplyExtrinsicResult,
 	transaction_validity::{
 		TransactionValidity, ValidTransaction, InvalidTransaction, TransactionValidityError,
 	},
@@ -35,7 +35,7 @@ use frame_system::Trait;
 use crate::{
 	AccountId, BlockNumber, Extrinsic, Transfer, H256 as Hash, Block, Header, Digest, AuthorityId
 };
-use primitives::storage::well_known_keys;
+use sp_core::{storage::well_known_keys, ChangesTrieConfiguration};
 
 const NONCE_OF: &[u8] = b"nonce:";
 const BALANCE_OF: &[u8] = b"balance:";
@@ -46,11 +46,12 @@ decl_module! {
 
 decl_storage! {
 	trait Store for Module<T: Trait> as TestRuntime {
-		ExtrinsicData: map u32 => Vec<u8>;
+		ExtrinsicData: map hasher(blake2_128_concat) u32 => Vec<u8>;
 		// The current block number being processed. Set by `execute_block`.
 		Number get(fn number): Option<BlockNumber>;
 		ParentHash get(fn parent_hash): Hash;
 		NewAuthorities get(fn new_authorities): Option<Vec<AuthorityId>>;
+		NewChangesTrieConfig get(fn new_changes_trie_config): Option<Option<ChangesTrieConfiguration>>;
 		StorageDigest get(fn storage_digest): Option<Digest>;
 		Authorities get(fn authorities) config(): Vec<AuthorityId>;
 	}
@@ -109,67 +110,43 @@ pub fn execute_block(mut block: Block) {
 	execute_block_with_state_root_handler(&mut block, Mode::Verify);
 }
 
-fn execute_block_with_state_root_handler(
-	block: &mut Block,
-	mode: Mode,
-) {
+fn execute_block_with_state_root_handler(block: &mut Block, mode: Mode) {
 	let header = &mut block.header;
 
-	// check transaction trie root represents the transactions.
-	let txs = block.extrinsics.iter().map(Encode::encode).collect::<Vec<_>>();
-	let txs_root = BlakeTwo256::ordered_trie_root(txs);
-	info_expect_equal_hash(&txs_root, &header.extrinsics_root);
-	if let Mode::Overwrite = mode {
-		header.extrinsics_root = txs_root;
-	} else {
-		assert!(txs_root == header.extrinsics_root, "Transaction trie root must be valid.");
-	}
-
-	// try to read something that depends on current header digest
-	// so that it'll be included in execution proof
-	if let Some(generic::DigestItem::Other(v)) = header.digest().logs().iter().next() {
-		let _: Option<u32> = storage::unhashed::get(&v);
-	}
+	initialize_block(header);
 
 	// execute transactions
-	block.extrinsics.iter().enumerate().for_each(|(i, e)| {
-		storage::unhashed::put(well_known_keys::EXTRINSIC_INDEX, &(i as u32));
-		let _ = execute_transaction_backend(e).unwrap_or_else(|_| panic!("Invalid transaction"));
-		storage::unhashed::kill(well_known_keys::EXTRINSIC_INDEX);
+	block.extrinsics.iter().for_each(|e| {
+		let _ = execute_transaction(e.clone()).unwrap_or_else(|_| panic!("Invalid transaction"));
 	});
 
-	let o_new_authorities = <NewAuthorities>::take();
-	let storage_root = Hash::decode(&mut &storage_root()[..])
-		.expect("`storage_root` is a valid hash");
+	let new_header = finalize_block();
 
 	if let Mode::Overwrite = mode {
-		header.state_root = storage_root;
+		header.state_root = new_header.state_root;
 	} else {
-		// check storage root.
-		info_expect_equal_hash(&storage_root, &header.state_root);
-		assert!(storage_root == header.state_root, "Storage root must match that calculated.");
-	}
-
-	// check digest
-	let digest = &mut header.digest;
-	if let Some(storage_changes_root) = storage_changes_root(&header.parent_hash.encode()) {
-		digest.push(
-			generic::DigestItem::ChangesTrieRoot(
-				Hash::decode(&mut &storage_changes_root[..])
-					.expect("`storage_changes_root` is a valid hash")
-			)
+		info_expect_equal_hash(&new_header.state_root, &header.state_root);
+		assert!(
+			new_header.state_root == header.state_root,
+			"Storage root must match that calculated.",
 		);
 	}
-	if let Some(new_authorities) = o_new_authorities {
-		digest.push(generic::DigestItem::Consensus(*b"aura", new_authorities.encode()));
-		digest.push(generic::DigestItem::Consensus(*b"babe", new_authorities.encode()));
+
+	if let Mode::Overwrite = mode {
+		header.extrinsics_root = new_header.extrinsics_root;
+	} else {
+		info_expect_equal_hash(&new_header.extrinsics_root, &header.extrinsics_root);
+		assert!(
+			new_header.extrinsics_root == header.extrinsics_root,
+			"Transaction trie root must be valid.",
+		);
 	}
 }
 
 /// The block executor.
 pub struct BlockExecutor;
 
-impl executive::ExecuteBlock<Block> for BlockExecutor {
+impl frame_executive::ExecuteBlock<Block> for BlockExecutor {
 	fn execute_block(block: Block) {
 		execute_block(block);
 	}
@@ -214,7 +191,7 @@ pub fn validate_transaction(utx: Extrinsic) -> TransactionValidity {
 /// This doesn't attempt to validate anything regarding the block.
 pub fn execute_transaction(utx: Extrinsic) -> ApplyExtrinsicResult {
 	let extrinsic_index: u32 = storage::unhashed::get(well_known_keys::EXTRINSIC_INDEX).unwrap();
-	let result = execute_transaction_backend(&utx);
+	let result = execute_transaction_backend(&utx, extrinsic_index);
 	ExtrinsicData::insert(extrinsic_index, utx.encode());
 	storage::unhashed::put(well_known_keys::EXTRINSIC_INDEX, &(extrinsic_index + 1));
 	result
@@ -224,12 +201,14 @@ pub fn execute_transaction(utx: Extrinsic) -> ApplyExtrinsicResult {
 pub fn finalize_block() -> Header {
 	let extrinsic_index: u32 = storage::unhashed::take(well_known_keys::EXTRINSIC_INDEX).unwrap();
 	let txs: Vec<_> = (0..extrinsic_index).map(ExtrinsicData::take).collect();
-	let extrinsics_root = BlakeTwo256::ordered_trie_root(txs).into();
+	let extrinsics_root = trie::blake2_256_ordered_root(txs).into();
 	let number = <Number>::take().expect("Number is set by `initialize_block`");
 	let parent_hash = <ParentHash>::take();
 	let mut digest = <StorageDigest>::take().expect("StorageDigest is set by `initialize_block`");
 
 	let o_new_authorities = <NewAuthorities>::take();
+	let new_changes_trie_config = <NewChangesTrieConfig>::take();
+
 	// This MUST come after all changes to storage are done. Otherwise we will fail the
 	// “Storage root does not match that calculated” assertion.
 	let storage_root = Hash::decode(&mut &storage_root()[..])
@@ -246,12 +225,18 @@ pub fn finalize_block() -> Header {
 		digest.push(generic::DigestItem::Consensus(*b"babe", new_authorities.encode()));
 	}
 
+	if let Some(new_config) = new_changes_trie_config {
+		digest.push(generic::DigestItem::ChangesTrieSignal(
+			generic::ChangesTrieSignal::NewConfiguration(new_config)
+		));
+	}
+
 	Header {
 		number,
 		extrinsics_root,
 		state_root: storage_root,
 		parent_hash,
-		digest: digest,
+		digest,
 	}
 }
 
@@ -261,13 +246,20 @@ fn check_signature(utx: &Extrinsic) -> Result<(), TransactionValidityError> {
 	utx.clone().check().map_err(|_| InvalidTransaction::BadProof.into()).map(|_| ())
 }
 
-fn execute_transaction_backend(utx: &Extrinsic) -> ApplyExtrinsicResult {
+fn execute_transaction_backend(utx: &Extrinsic, extrinsic_index: u32) -> ApplyExtrinsicResult {
 	check_signature(utx)?;
 	match utx {
-		Extrinsic::Transfer(ref transfer, _) => execute_transfer_backend(transfer),
-		Extrinsic::AuthoritiesChange(ref new_auth) => execute_new_authorities_backend(new_auth),
+		Extrinsic::Transfer { exhaust_resources_when_not_first: true, .. } if extrinsic_index != 0 =>
+			Err(InvalidTransaction::ExhaustsResources.into()),
+		Extrinsic::Transfer { ref transfer, .. } =>
+			execute_transfer_backend(transfer),
+		Extrinsic::AuthoritiesChange(ref new_auth) =>
+			execute_new_authorities_backend(new_auth),
 		Extrinsic::IncludeData(_) => Ok(Ok(())),
-		Extrinsic::StorageChange(key, value) => execute_storage_change(key, value.as_ref().map(|v| &**v)),
+		Extrinsic::StorageChange(key, value) =>
+			execute_storage_change(key, value.as_ref().map(|v| &**v)),
+		Extrinsic::ChangesTrieConfigUpdate(ref new_config) =>
+			execute_changes_trie_config_update(new_config.clone()),
 	}
 }
 
@@ -310,9 +302,21 @@ fn execute_storage_change(key: &[u8], value: Option<&[u8]>) -> ApplyExtrinsicRes
 	Ok(Ok(()))
 }
 
+fn execute_changes_trie_config_update(new_config: Option<ChangesTrieConfiguration>) -> ApplyExtrinsicResult {
+	match new_config.clone() {
+		Some(new_config) => storage::unhashed::put_raw(
+			well_known_keys::CHANGES_TRIE_CONFIG,
+			&new_config.encode(),
+		),
+		None => storage::unhashed::kill(well_known_keys::CHANGES_TRIE_CONFIG),
+	}
+	<NewChangesTrieConfig>::put(new_config);
+	Ok(Ok(()))
+}
+
 #[cfg(feature = "std")]
 fn info_expect_equal_hash(given: &Hash, expected: &Hash) {
-	use primitives::hexdisplay::HexDisplay;
+	use sp_core::hexdisplay::HexDisplay;
 	if given != expected {
 		println!(
 			"Hash: given={}, expected={}",
@@ -338,7 +342,7 @@ mod tests {
 	use sp_io::TestExternalities;
 	use substrate_test_runtime_client::{AccountKeyring, Sr25519Keyring};
 	use crate::{Header, Transfer, WASM_BINARY};
-	use primitives::{NeverNativeValue, map, traits::CodeExecutor};
+	use sp_core::{NeverNativeValue, map, traits::{CodeExecutor, RuntimeCode}};
 	use sc_executor::{NativeExecutor, WasmExecutionMethod, native_executor_instance};
 	use sp_io::hashing::twox_128;
 
@@ -350,7 +354,7 @@ mod tests {
 	);
 
 	fn executor() -> NativeExecutor<NativeDispatch> {
-		NativeExecutor::new(WasmExecutionMethod::Interpreted, None)
+		NativeExecutor::new(WasmExecutionMethod::Interpreted, None, 8)
 	}
 
 	fn new_test_ext() -> TestExternalities {
@@ -361,16 +365,16 @@ mod tests {
 		];
 		TestExternalities::new_with_code(
 			WASM_BINARY,
-			(
-				map![
+			sp_core::storage::Storage {
+				top: map![
 					twox_128(b"latest").to_vec() => vec![69u8; 32],
 					twox_128(b"sys:auth").to_vec() => authorities.encode(),
 					blake2_256(&AccountKeyring::Alice.to_raw_public().to_keyed_vec(b"balance:")).to_vec() => {
 						vec![111u8, 0, 0, 0, 0, 0, 0, 0]
 					}
 				],
-				map![],
-			)
+				children: map![],
+			},
 		)
 	}
 
@@ -401,8 +405,15 @@ mod tests {
 	fn block_import_works_wasm() {
 		block_import_works(|b, ext| {
 			let mut ext = ext.ext();
-			executor().call::<_, NeverNativeValue, fn() -> _>(
+			let runtime_code = RuntimeCode {
+				code_fetcher: &sp_core::traits::WrappedRuntimeCode(WASM_BINARY.into()),
+				hash: Vec::new(),
+				heap_pages: None,
+			};
+
+			executor().call::<NeverNativeValue, fn() -> _>(
 				&mut ext,
+				&runtime_code,
 				"Core_execute_block",
 				&b.encode(),
 				false,
@@ -494,8 +505,15 @@ mod tests {
 	fn block_import_with_transaction_works_wasm() {
 		block_import_with_transaction_works(|b, ext| {
 			let mut ext = ext.ext();
-			executor().call::<_, NeverNativeValue, fn() -> _>(
+			let runtime_code = RuntimeCode {
+				code_fetcher: &sp_core::traits::WrappedRuntimeCode(WASM_BINARY.into()),
+				hash: Vec::new(),
+				heap_pages: None,
+			};
+
+			executor().call::<NeverNativeValue, fn() -> _>(
 				&mut ext,
+				&runtime_code,
 				"Core_execute_block",
 				&b.encode(),
 				false,

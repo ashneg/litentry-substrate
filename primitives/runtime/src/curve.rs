@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -16,11 +16,11 @@
 
 //! Provides some utilities to define a piecewise linear function.
 
-use crate::{Perbill, traits::{SimpleArithmetic, SaturatedConversion}};
+use crate::{Perbill, PerThing, traits::{AtLeast32Bit, SaturatedConversion}};
 use core::ops::Sub;
 
 /// Piecewise Linear function in [0, 1] -> [0, 1].
-#[derive(PartialEq, Eq, primitives::RuntimeDebug)]
+#[derive(PartialEq, Eq, sp_core::RuntimeDebug)]
 pub struct PiecewiseLinear<'a> {
 	/// Array of points. Must be in order from the lowest abscissas to the highest.
 	pub points: &'a [(Perbill, Perbill)],
@@ -35,7 +35,7 @@ fn abs_sub<N: Ord + Sub<Output=N> + Clone>(a: N, b: N) -> N where {
 impl<'a> PiecewiseLinear<'a> {
 	/// Compute `f(n/d)*d` with `n <= d`. This is useful to avoid loss of precision.
 	pub fn calculate_for_fraction_times_denominator<N>(&self, n: N, d: N) -> N where
-		N: SimpleArithmetic + Clone
+		N: AtLeast32Bit + Clone
 	{
 		let n = n.min(d.clone());
 
@@ -65,7 +65,7 @@ impl<'a> PiecewiseLinear<'a> {
 			next.0.deconstruct().saturating_sub(prev.0.deconstruct()),
 		);
 
-		// If both substration are same sign then result is positive
+		// If both subtractions are same sign then result is positive
 		if (n > prev.0 * d.clone()) == (next.1.deconstruct() > prev.1.deconstruct()) {
 			(prev.1 * d).saturating_add(delta_y)
 		// Otherwise result is negative
@@ -79,7 +79,7 @@ impl<'a> PiecewiseLinear<'a> {
 // This is guaranteed not to overflow on whatever values nor lose precision.
 // `q` must be superior to zero.
 fn multiply_by_rational_saturating<N>(value: N, p: u32, q: u32) -> N
-	where N: SimpleArithmetic + Clone
+	where N: AtLeast32Bit + Clone
 {
 	let q = q.max(1);
 

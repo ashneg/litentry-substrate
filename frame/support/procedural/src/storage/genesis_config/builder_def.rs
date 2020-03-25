@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -88,7 +88,7 @@ impl BuilderDef {
 						}}
 					},
 					StorageLineTypeDef::Simple(_) => unreachable!(),
-					StorageLineTypeDef::Map(map) | StorageLineTypeDef::LinkedMap(map) => {
+					StorageLineTypeDef::Map(map) => {
 						let key = &map.key;
 						quote!{{
 							#data

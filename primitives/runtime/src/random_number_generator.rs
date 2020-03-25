@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -66,7 +66,7 @@ impl<Hashing: Hash> RandomNumberGenerator<Hashing> {
 		loop {
 			if self.offset() + needed > self.current.as_ref().len() {
 				// rehash
-				self.current = Hashing::hash(self.current.as_ref());
+				self.current = <Hashing as Hash>::hash(self.current.as_ref());
 				self.offset = 0;
 			}
 			let data = &self.current.as_ref()[self.offset()..self.offset() + needed];

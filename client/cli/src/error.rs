@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ pub enum Error {
 	/// Cli error
 	Cli(clap::Error),
 	/// Service error
-	Service(service::Error),
+	Service(sc_service::Error),
 	/// Client error
 	Client(sp_blockchain::Error),
 	/// Input error
@@ -46,6 +46,12 @@ pub enum Error {
 impl std::convert::From<String> for Error {
 	fn from(s: String) -> Error {
 		Error::Input(s)
+	}
+}
+
+impl std::convert::From<&str> for Error {
+	fn from(s: &str) -> Error {
+		Error::Input(s.to_string())
 	}
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -154,59 +154,6 @@ pub fn decl_and_impl(scrate: &TokenStream, def: &DeclStorageDefExt) -> TokenStre
 
 						fn from_query_to_optional_value(v: Self::Query) -> Option<#value_type> {
 							#from_query_to_optional_value
-						}
-					}
-				)
-			},
-			StorageLineTypeDef::LinkedMap(map) => {
-				let hasher = map.hasher.to_storage_hasher_struct();
-
-				let head_prefix_str = syn::LitStr::new(
-					&format!("HeadOf{}", line.name.to_string()),
-					line.name.span(),
-				);
-
-				quote!(
-					impl<#impl_trait> #scrate::storage::StoragePrefixedMap<#value_type>
-						for #storage_struct #optional_storage_where_clause
-					{
-						fn module_prefix() -> &'static [u8] {
-							#instance_or_inherent::PREFIX.as_bytes()
-						}
-
-						fn storage_prefix() -> &'static [u8] {
-							#storage_name_str.as_bytes()
-						}
-					}
-
-					impl<#impl_trait> #scrate::#storage_generator_trait for #storage_struct
-					#optional_storage_where_clause
-					{
-						type Query = #query_type;
-						type KeyFormat = Self;
-
-						fn from_optional_value_to_query(v: Option<#value_type>) -> Self::Query {
-							#from_optional_value_to_query
-						}
-
-						fn from_query_to_optional_value(v: Self::Query) -> Option<#value_type> {
-							#from_query_to_optional_value
-						}
-					}
-
-					impl<#impl_trait> #scrate::storage::generator::LinkedMapKeyFormat for #storage_struct {
-						type Hasher = #scrate::#hasher;
-
-						fn module_prefix() -> &'static [u8] {
-							#instance_or_inherent::PREFIX.as_bytes()
-						}
-
-						fn storage_prefix() -> &'static [u8] {
-							#storage_name_str.as_bytes()
-						}
-
-						fn head_prefix() -> &'static [u8] {
-							#head_prefix_str.as_bytes()
 						}
 					}
 				)

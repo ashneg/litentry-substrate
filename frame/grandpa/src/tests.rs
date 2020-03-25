@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -18,17 +18,28 @@
 
 #![cfg(test)]
 
-use sp_runtime::{testing::Digest, traits::{Header, OnFinalize}};
+use sp_runtime::{testing::{H256, Digest}, traits::Header};
+use frame_support::traits::OnFinalize;
 use crate::mock::*;
-use system::{EventRecord, Phase};
+use frame_system::{EventRecord, Phase};
 use codec::{Decode, Encode};
 use fg_primitives::ScheduledChange;
 use super::*;
 
+fn initialize_block(number: u64, parent_hash: H256) {
+	System::initialize(
+		&number,
+		&parent_hash,
+		&Default::default(),
+		&Default::default(),
+		Default::default(),
+	);
+}
+
 #[test]
 fn authorities_change_logged() {
 	new_test_ext(vec![(1, 1), (2, 1), (3, 1)]).execute_with(|| {
-		System::initialize(&1, &Default::default(), &Default::default(), &Default::default());
+		initialize_block(1, Default::default());
 		Grandpa::schedule_change(to_authorities(vec![(4, 1), (5, 1), (6, 1)]), 0, None).unwrap();
 
 		System::note_finished_extrinsics();
@@ -56,7 +67,7 @@ fn authorities_change_logged() {
 #[test]
 fn authorities_change_logged_after_delay() {
 	new_test_ext(vec![(1, 1), (2, 1), (3, 1)]).execute_with(|| {
-		System::initialize(&1, &Default::default(), &Default::default(), &Default::default());
+		initialize_block(1, Default::default());
 		Grandpa::schedule_change(to_authorities(vec![(4, 1), (5, 1), (6, 1)]), 1, None).unwrap();
 		Grandpa::on_finalize(1);
 		let header = System::finalize();
@@ -71,7 +82,7 @@ fn authorities_change_logged_after_delay() {
 		// no change at this height.
 		assert_eq!(System::events(), vec![]);
 
-		System::initialize(&2, &header.hash(), &Default::default(), &Default::default());
+		initialize_block(2, header.hash());
 		System::note_finished_extrinsics();
 		Grandpa::on_finalize(2);
 
@@ -89,7 +100,7 @@ fn authorities_change_logged_after_delay() {
 #[test]
 fn cannot_schedule_change_when_one_pending() {
 	new_test_ext(vec![(1, 1), (2, 1), (3, 1)]).execute_with(|| {
-		System::initialize(&1, &Default::default(), &Default::default(), &Default::default());
+		initialize_block(1, Default::default());
 		Grandpa::schedule_change(to_authorities(vec![(4, 1), (5, 1), (6, 1)]), 1, None).unwrap();
 		assert!(<PendingChange<Test>>::exists());
 		assert!(Grandpa::schedule_change(to_authorities(vec![(5, 1)]), 1, None).is_err());
@@ -97,14 +108,14 @@ fn cannot_schedule_change_when_one_pending() {
 		Grandpa::on_finalize(1);
 		let header = System::finalize();
 
-		System::initialize(&2, &header.hash(), &Default::default(), &Default::default());
+		initialize_block(2, header.hash());
 		assert!(<PendingChange<Test>>::exists());
 		assert!(Grandpa::schedule_change(to_authorities(vec![(5, 1)]), 1, None).is_err());
 
 		Grandpa::on_finalize(2);
 		let header = System::finalize();
 
-		System::initialize(&3, &header.hash(), &Default::default(), &Default::default());
+		initialize_block(3, header.hash());
 		assert!(!<PendingChange<Test>>::exists());
 		assert!(Grandpa::schedule_change(to_authorities(vec![(5, 1)]), 1, None).is_ok());
 
@@ -132,7 +143,7 @@ fn new_decodes_from_old() {
 #[test]
 fn dispatch_forced_change() {
 	new_test_ext(vec![(1, 1), (2, 1), (3, 1)]).execute_with(|| {
-		System::initialize(&1, &Default::default(), &Default::default(), &Default::default());
+		initialize_block(1, Default::default());
 		Grandpa::schedule_change(
 			to_authorities(vec![(4, 1), (5, 1), (6, 1)]),
 			5,
@@ -146,7 +157,7 @@ fn dispatch_forced_change() {
 		let mut header = System::finalize();
 
 		for i in 2..7 {
-			System::initialize(&i, &header.hash(), &Default::default(), &Default::default());
+			initialize_block(i, header.hash());
 			assert!(<PendingChange<Test>>::get().unwrap().forced.is_some());
 			assert_eq!(Grandpa::next_forced(), Some(11));
 			assert!(Grandpa::schedule_change(to_authorities(vec![(5, 1)]), 1, None).is_err());
@@ -159,7 +170,7 @@ fn dispatch_forced_change() {
 		// change has been applied at the end of block 6.
 		// add a normal change.
 		{
-			System::initialize(&7, &header.hash(), &Default::default(), &Default::default());
+			initialize_block(7, header.hash());
 			assert!(!<PendingChange<Test>>::exists());
 			assert_eq!(Grandpa::grandpa_authorities(), to_authorities(vec![(4, 1), (5, 1), (6, 1)]));
 			assert!(Grandpa::schedule_change(to_authorities(vec![(5, 1)]), 1, None).is_ok());
@@ -169,7 +180,7 @@ fn dispatch_forced_change() {
 
 		// run the normal change.
 		{
-			System::initialize(&8, &header.hash(), &Default::default(), &Default::default());
+			initialize_block(8, header.hash());
 			assert!(<PendingChange<Test>>::exists());
 			assert_eq!(Grandpa::grandpa_authorities(), to_authorities(vec![(4, 1), (5, 1), (6, 1)]));
 			assert!(Grandpa::schedule_change(to_authorities(vec![(5, 1)]), 1, None).is_err());
@@ -180,7 +191,7 @@ fn dispatch_forced_change() {
 		// normal change applied. but we can't apply a new forced change for some
 		// time.
 		for i in 9..11 {
-			System::initialize(&i, &header.hash(), &Default::default(), &Default::default());
+			initialize_block(i, header.hash());
 			assert!(!<PendingChange<Test>>::exists());
 			assert_eq!(Grandpa::grandpa_authorities(), to_authorities(vec![(5, 1)]));
 			assert_eq!(Grandpa::next_forced(), Some(11));
@@ -190,7 +201,7 @@ fn dispatch_forced_change() {
 		}
 
 		{
-			System::initialize(&11, &header.hash(), &Default::default(), &Default::default());
+			initialize_block(11, header.hash());
 			assert!(!<PendingChange<Test>>::exists());
 			assert!(Grandpa::schedule_change(to_authorities(vec![(5, 1), (6, 1), (7, 1)]), 5, Some(0)).is_ok());
 			assert_eq!(Grandpa::next_forced(), Some(21));
@@ -205,7 +216,7 @@ fn dispatch_forced_change() {
 fn schedule_pause_only_when_live() {
 	new_test_ext(vec![(1, 1), (2, 1), (3, 1)]).execute_with(|| {
 		// we schedule a pause at block 1 with delay of 1
-		System::initialize(&1, &Default::default(), &Default::default(), &Default::default());
+		initialize_block(1, Default::default());
 		Grandpa::schedule_pause(1).unwrap();
 
 		// we've switched to the pending pause state
@@ -220,7 +231,7 @@ fn schedule_pause_only_when_live() {
 		Grandpa::on_finalize(1);
 		let _ = System::finalize();
 
-		System::initialize(&2, &Default::default(), &Default::default(), &Default::default());
+		initialize_block(2, Default::default());
 
 		// signaling a pause now should fail
 		assert!(Grandpa::schedule_pause(1).is_err());
@@ -239,7 +250,7 @@ fn schedule_pause_only_when_live() {
 #[test]
 fn schedule_resume_only_when_paused() {
 	new_test_ext(vec![(1, 1), (2, 1), (3, 1)]).execute_with(|| {
-		System::initialize(&1, &Default::default(), &Default::default(), &Default::default());
+		initialize_block(1, Default::default());
 
 		// the set is currently live, resuming it is an error
 		assert!(Grandpa::schedule_resume(1).is_err());
@@ -260,16 +271,16 @@ fn schedule_resume_only_when_paused() {
 		);
 
 		// we schedule the set to go back live in 2 blocks
-		System::initialize(&2, &Default::default(), &Default::default(), &Default::default());
+		initialize_block(2, Default::default());
 		Grandpa::schedule_resume(2).unwrap();
 		Grandpa::on_finalize(2);
 		let _ = System::finalize();
 
-		System::initialize(&3, &Default::default(), &Default::default(), &Default::default());
+		initialize_block(3, Default::default());
 		Grandpa::on_finalize(3);
 		let _ = System::finalize();
 
-		System::initialize(&4, &Default::default(), &Default::default(), &Default::default());
+		initialize_block(4, Default::default());
 		Grandpa::on_finalize(4);
 		let _ = System::finalize();
 
@@ -307,22 +318,4 @@ fn time_slot_have_sane_ord() {
 		}
 	];
 	assert!(FIXTURE.windows(2).all(|f| f[0] < f[1]));
-}
-
-#[test]
-#[cfg(feature = "migrate-authorities")]
-fn authorities_migration() {
-	use sp_runtime::traits::OnInitialize;
-
-	with_externalities(&mut new_test_ext(vec![]), || {
-		let authorities = to_authorities(vec![(1, 1), (2, 1), (3, 1)]);
-
-		Authorities::put(authorities.clone());
-		assert!(Grandpa::grandpa_authorities().is_empty());
-
-		Grandpa::on_initialize(1);
-
-		assert!(!Authorities::exists());
-		assert_eq!(Grandpa::grandpa_authorities(), authorities);
-	});
 }

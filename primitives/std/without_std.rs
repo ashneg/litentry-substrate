@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -27,7 +27,6 @@ pub use core::convert;
 pub use core::default;
 pub use core::fmt;
 pub use core::hash;
-pub use core::intrinsics;
 pub use core::iter;
 pub use core::marker;
 pub use core::mem;
@@ -36,7 +35,7 @@ pub use core::ops;
 pub use core::ptr;
 pub use core::result;
 pub use core::slice;
-// Allow intepreting vectors of bytes as strings, but not constructing them.
+// Allow interpreting vectors of bytes as strings, but not constructing them.
 pub use core::str;
 // We are trying to avoid certain things here, such as `core::string`
 // (if you need `String` you are probably doing something wrong, since

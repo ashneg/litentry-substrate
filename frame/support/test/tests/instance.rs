@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -17,16 +17,16 @@
 #![recursion_limit="128"]
 
 use sp_runtime::{generic, BuildStorage, traits::{BlakeTwo256, Block as _, Verify}};
-use support::{
+use frame_support::{
 	Parameter, traits::Get, parameter_types,
 	metadata::{
 		DecodeDifferent, StorageMetadata, StorageEntryModifier, StorageEntryType, DefaultByteGetter,
 		StorageEntryMetadata, StorageHasher,
 	},
-	StorageValue, StorageMap, StorageLinkedMap, StorageDoubleMap,
+	StorageValue, StorageMap, StorageDoubleMap,
 };
-use inherents::{ProvideInherent, InherentData, InherentIdentifier, MakeFatalError};
-use primitives::{H256, sr25519};
+use sp_inherents::{ProvideInherent, InherentData, InherentIdentifier, MakeFatalError};
+use sp_core::{H256, sr25519};
 
 mod system;
 
@@ -46,7 +46,7 @@ mod module1 {
 		type GenericType: Default + Clone + codec::Codec + codec::EncodeLike;
 	}
 
-	support::decl_module! {
+	frame_support::decl_module! {
 		pub struct Module<T: Trait<I>, I: InstantiableThing> for enum Call where
 			origin: <T as system::Trait>::Origin,
 			T::BlockNumber: From<u32>
@@ -62,13 +62,12 @@ mod module1 {
 		}
 	}
 
-	support::decl_storage! {
+	frame_support::decl_storage! {
 		trait Store for Module<T: Trait<I>, I: InstantiableThing> as Module1 where
 			T::BlockNumber: From<u32> + std::fmt::Display
 		{
 			pub Value config(value): T::GenericType;
-			pub Map: map u32 => u64;
-			pub LinkedMap: linked_map u32 => u64;
+			pub Map: map hasher(identity) u32 => u64;
 		}
 
 		add_extra_genesis {
@@ -79,7 +78,7 @@ mod module1 {
 		}
 	}
 
-	support::decl_event! {
+	frame_support::decl_event! {
 		pub enum Event<T, I> where Phantom = std::marker::PhantomData<T> {
 			_Phantom(Phantom),
 			AnotherVariant(u32),
@@ -98,7 +97,7 @@ mod module1 {
 		T::BlockNumber: From<u32>
 	{
 		type Call = Call<T, I>;
-		type Error = MakeFatalError<inherents::Error>;
+		type Error = MakeFatalError<sp_inherents::Error>;
 		const INHERENT_IDENTIFIER: InherentIdentifier = INHERENT_IDENTIFIER;
 
 		fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
@@ -125,7 +124,7 @@ mod module2 {
 
 	impl<T: Trait<I>, I: Instance> Currency for Module<T, I> {}
 
-	support::decl_module! {
+	frame_support::decl_module! {
 		pub struct Module<T: Trait<I>, I: Instance=DefaultInstance> for enum Call where
 			origin: <T as system::Trait>::Origin
 		{
@@ -133,16 +132,15 @@ mod module2 {
 		}
 	}
 
-	support::decl_storage! {
+	frame_support::decl_storage! {
 		trait Store for Module<T: Trait<I>, I: Instance=DefaultInstance> as Module2 {
 			pub Value config(value): T::Amount;
-			pub Map config(map): map u64 => u64;
-			pub LinkedMap config(linked_map): linked_map u64 => Vec<u8>;
-			pub DoubleMap config(double_map): double_map u64, blake2_256(u64) => u64;
+			pub Map config(map): map hasher(identity) u64 => u64;
+			pub DoubleMap config(double_map): double_map hasher(identity) u64, hasher(identity) u64 => u64;
 		}
 	}
 
-	support::decl_event! {
+	frame_support::decl_event! {
 		pub enum Event<T, I=DefaultInstance> where Amount = <T as Trait<I>>::Amount {
 			Variant(Amount),
 		}
@@ -158,7 +156,7 @@ mod module2 {
 
 	impl<T: Trait<I>, I: Instance> ProvideInherent for Module<T, I> {
 		type Call = Call<T, I>;
-		type Error = MakeFatalError<inherents::Error>;
+		type Error = MakeFatalError<sp_inherents::Error>;
 		const INHERENT_IDENTIFIER: InherentIdentifier = INHERENT_IDENTIFIER;
 
 		fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
@@ -181,7 +179,7 @@ mod module3 {
 		type Currency2: Currency;
 	}
 
-	support::decl_module! {
+	frame_support::decl_module! {
 		pub struct Module<T: Trait> for enum Call where origin: <T as system::Trait>::Origin {}
 	}
 }
@@ -238,15 +236,16 @@ impl system::Trait for Runtime {
 	type BlockNumber = BlockNumber;
 	type AccountId = AccountId;
 	type Event = Event;
+	type ModuleToIndex = ();
 }
 
-support::construct_runtime!(
+frame_support::construct_runtime!(
 	pub enum Runtime where
 		Block = Block,
 		NodeBlock = Block,
 		UncheckedExtrinsic = UncheckedExtrinsic
 	{
-		System: system::{Module, Call, Event},
+		System: system::{Module, Call, Event<T>},
 		Module1_1: module1::<Instance1>::{
 			Module, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent
 		},
@@ -284,13 +283,11 @@ fn new_test_ext() -> sp_io::TestExternalities {
 		module2: Some(module2::GenesisConfig {
 			value: 4,
 			map: vec![(0, 0)],
-			linked_map: vec![(0, vec![0])],
 			double_map: vec![(0, 0, 0)],
 		}),
 		module2_Instance1: Some(module2::GenesisConfig {
 			value: 4,
 			map: vec![(0, 0)],
-			linked_map: vec![(0, vec![0])],
 			double_map: vec![(0, 0, 0)],
 		}),
 		module2_Instance2: None,
@@ -299,9 +296,12 @@ fn new_test_ext() -> sp_io::TestExternalities {
 }
 
 #[test]
-fn storage_instance_independance() {
-	let mut storage = Default::default();
-	state_machine::BasicExternalities::execute_with_storage(&mut storage, || {
+fn storage_instance_independence() {
+	let mut storage = sp_core::storage::Storage {
+		top: std::collections::BTreeMap::new(),
+		children: std::collections::HashMap::new()
+	};
+	sp_state_machine::BasicExternalities::execute_with_storage(&mut storage, || {
 		module2::Value::<Runtime>::put(0);
 		module2::Value::<Runtime, module2::Instance1>::put(0);
 		module2::Value::<Runtime, module2::Instance2>::put(0);
@@ -310,17 +310,13 @@ fn storage_instance_independance() {
 		module2::Map::<module2::Instance1>::insert(0, 0);
 		module2::Map::<module2::Instance2>::insert(0, 0);
 		module2::Map::<module2::Instance3>::insert(0, 0);
-		module2::LinkedMap::<module2::DefaultInstance>::insert::<_, Vec<u8>>(0, vec![]);
-		module2::LinkedMap::<module2::Instance1>::insert::<_, Vec<u8>>(0, vec![]);
-		module2::LinkedMap::<module2::Instance2>::insert::<_, Vec<u8>>(0, vec![]);
-		module2::LinkedMap::<module2::Instance3>::insert::<_, Vec<u8>>(0, vec![]);
 		module2::DoubleMap::<module2::DefaultInstance>::insert(&0, &0, &0);
 		module2::DoubleMap::<module2::Instance1>::insert(&0, &0, &0);
 		module2::DoubleMap::<module2::Instance2>::insert(&0, &0, &0);
 		module2::DoubleMap::<module2::Instance3>::insert(&0, &0, &0);
 	});
-	// 16 storage values + 4 linked_map head.
-	assert_eq!(storage.0.len(), 16 + 4);
+	// 12 storage values.
+	assert_eq!(storage.top.len(), 12);
 }
 
 #[test]
@@ -328,7 +324,6 @@ fn storage_with_instance_basic_operation() {
 	new_test_ext().execute_with(|| {
 		type Value = module2::Value<Runtime, module2::Instance1>;
 		type Map = module2::Map<module2::Instance1>;
-		type LinkedMap = module2::LinkedMap<module2::Instance1>;
 		type DoubleMap = module2::DoubleMap<module2::Instance1>;
 
 		assert_eq!(Value::exists(), true);
@@ -344,8 +339,8 @@ fn storage_with_instance_basic_operation() {
 		assert_eq!(Value::get(), 0);
 
 		let key = 1;
-		assert_eq!(Map::exists(0), true);
-		assert_eq!(Map::exists(key), false);
+		assert_eq!(Map::contains_key(0), true);
+		assert_eq!(Map::contains_key(key), false);
 		Map::insert(key, 1);
 		assert_eq!(Map::get(key), 1);
 		assert_eq!(Map::take(key), 1);
@@ -353,33 +348,13 @@ fn storage_with_instance_basic_operation() {
 		Map::mutate(key, |a| *a=2);
 		assert_eq!(Map::get(key), 2);
 		Map::remove(key);
-		assert_eq!(Map::exists(key), false);
+		assert_eq!(Map::contains_key(key), false);
 		assert_eq!(Map::get(key), 0);
-
-		assert_eq!(LinkedMap::exists(0), true);
-		assert_eq!(LinkedMap::exists(key), false);
-		LinkedMap::insert(key, vec![1]);
-		assert_eq!(LinkedMap::enumerate().count(), 2);
-		assert_eq!(LinkedMap::get(key), vec![1]);
-		assert_eq!(LinkedMap::take(key), vec![1]);
-		assert_eq!(LinkedMap::enumerate().count(), 1);
-		assert_eq!(LinkedMap::get(key), vec![]);
-		LinkedMap::mutate(key, |a| *a=vec![2]);
-		assert_eq!(LinkedMap::enumerate().count(), 2);
-		assert_eq!(LinkedMap::get(key), vec![2]);
-		LinkedMap::remove(key);
-		assert_eq!(LinkedMap::enumerate().count(), 1);
-		assert_eq!(LinkedMap::exists(key), false);
-		assert_eq!(LinkedMap::get(key), vec![]);
-		assert_eq!(LinkedMap::exists(key), false);
-		assert_eq!(LinkedMap::enumerate().count(), 1);
-		LinkedMap::insert(key, &vec![1]);
-		assert_eq!(LinkedMap::enumerate().count(), 2);
 
 		let key1 = 1;
 		let key2 = 1;
-		assert_eq!(DoubleMap::exists(&0, &0), true);
-		assert_eq!(DoubleMap::exists(&key1, &key2), false);
+		assert_eq!(DoubleMap::contains_key(&0, &0), true);
+		assert_eq!(DoubleMap::contains_key(&key1, &key2), false);
 		DoubleMap::insert(&key1, &key2, &1);
 		assert_eq!(DoubleMap::get(&key1, &key2), 1);
 		assert_eq!(DoubleMap::take(&key1, &key2), 1);
@@ -412,10 +387,10 @@ const EXPECTED_METADATA: StorageMetadata = StorageMetadata {
 				name: DecodeDifferent::Encode("Map"),
 				modifier: StorageEntryModifier::Default,
 				ty: StorageEntryType::Map {
-					hasher: StorageHasher::Blake2_256,
+					hasher: StorageHasher::Identity,
 					key: DecodeDifferent::Encode("u64"),
 					value: DecodeDifferent::Encode("u64"),
-					is_linked: false,
+					unused: false,
 				},
 				default: DecodeDifferent::Encode(
 					DefaultByteGetter(
@@ -427,29 +402,11 @@ const EXPECTED_METADATA: StorageMetadata = StorageMetadata {
 				documentation: DecodeDifferent::Encode(&[]),
 			},
 			StorageEntryMetadata {
-				name: DecodeDifferent::Encode("LinkedMap"),
-				modifier: StorageEntryModifier::Default,
-				ty: StorageEntryType::Map {
-					hasher: StorageHasher::Blake2_256,
-					key: DecodeDifferent::Encode("u64"),
-					value: DecodeDifferent::Encode("Vec<u8>"),
-					is_linked: true,
-				},
-				default: DecodeDifferent::Encode(
-					DefaultByteGetter(
-						&module2::__GetByteStructLinkedMap(
-							std::marker::PhantomData::<(Runtime, module2::Instance2)>
-						)
-					)
-				),
-				documentation: DecodeDifferent::Encode(&[]),
-			},
-			StorageEntryMetadata {
 				name: DecodeDifferent::Encode("DoubleMap"),
 				modifier: StorageEntryModifier::Default,
 				ty: StorageEntryType::DoubleMap {
-					hasher: StorageHasher::Blake2_256,
-					key2_hasher: StorageHasher::Blake2_256,
+					hasher: StorageHasher::Identity,
+					key2_hasher: StorageHasher::Identity,
 					key1: DecodeDifferent::Encode("u64"),
 					key2: DecodeDifferent::Encode("u64"),
 					value: DecodeDifferent::Encode("u64"),

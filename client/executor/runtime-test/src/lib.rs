@@ -16,9 +16,32 @@ use sp_io::{
 #[cfg(not(feature = "std"))]
 use sp_runtime::{print, traits::{BlakeTwo256, Hash}};
 #[cfg(not(feature = "std"))]
-use primitives::{ed25519, sr25519};
+use sp_core::{ed25519, sr25519};
+#[cfg(not(feature = "std"))]
+use sp_sandbox::Value;
 
-primitives::wasm_export_functions! {
+extern "C" {
+	#[allow(dead_code)]
+	fn missing_external();
+
+	#[allow(dead_code)]
+	fn yet_another_missing_external();
+}
+
+#[cfg(not(feature = "std"))]
+/// Mutable static variables should be always observed to have
+/// the initialized value at the start of a runtime call.
+static mut MUTABLE_STATIC: u64 = 32;
+
+sp_core::wasm_export_functions! {
+	fn test_calling_missing_external() {
+		unsafe { missing_external() }
+	}
+
+	fn test_calling_yet_another_missing_external() {
+		unsafe { yet_another_missing_external() }
+	}
+
 	fn test_data_in(input: Vec<u8>) -> Vec<u8> {
 		print("set_storage");
 		storage::set(b"input", &input);
@@ -112,8 +135,8 @@ primitives::wasm_export_functions! {
 		execute_sandboxed(
 			&code,
 			&[
-				sandbox::TypedValue::I32(0x12345678),
-				sandbox::TypedValue::I64(0x1234567887654321),
+				Value::I32(0x12345678),
+				Value::I64(0x1234567887654321),
 			],
 		).is_ok()
 	}
@@ -122,10 +145,10 @@ primitives::wasm_export_functions! {
 		let ok = match execute_sandboxed(
 			&code,
 			&[
-				sandbox::TypedValue::I32(0x1336),
+				Value::I32(0x1336),
 			]
 		) {
-			Ok(sandbox::ReturnValue::Value(sandbox::TypedValue::I32(0x1337))) => true,
+			Ok(sp_sandbox::ReturnValue::Value(Value::I32(0x1337))) => true,
 			_ => false,
 		};
 
@@ -133,19 +156,35 @@ primitives::wasm_export_functions! {
 	}
 
 	fn test_sandbox_instantiate(code: Vec<u8>) -> u8 {
-		let env_builder = sandbox::EnvironmentDefinitionBuilder::new();
-		let code = match sandbox::Instance::new(&code, &env_builder, &mut ()) {
+		let env_builder = sp_sandbox::EnvironmentDefinitionBuilder::new();
+		let code = match sp_sandbox::Instance::new(&code, &env_builder, &mut ()) {
 			Ok(_) => 0,
-			Err(sandbox::Error::Module) => 1,
-			Err(sandbox::Error::Execution) => 2,
-			Err(sandbox::Error::OutOfBounds) => 3,
+			Err(sp_sandbox::Error::Module) => 1,
+			Err(sp_sandbox::Error::Execution) => 2,
+			Err(sp_sandbox::Error::OutOfBounds) => 3,
 		};
 
 		code
 	}
 
+
+	fn test_sandbox_get_global_val(code: Vec<u8>) -> i64 {
+		let env_builder = sp_sandbox::EnvironmentDefinitionBuilder::new();
+		let instance = if let Ok(i) = sp_sandbox::Instance::new(&code, &env_builder, &mut ()) {
+			i
+		} else {
+			return 20;
+		};
+
+		match instance.get_global_val("test_global") {
+			Some(sp_sandbox::Value::I64(val)) => val,
+			None => 30,
+			val => 40,
+		}
+	}
+
 	fn test_offchain_local_storage() -> bool {
-		let kind = primitives::offchain::StorageKind::PERSISTENT;
+		let kind = sp_core::offchain::StorageKind::PERSISTENT;
 		assert_eq!(sp_io::offchain::local_storage_get(kind, b"test"), None);
 		sp_io::offchain::local_storage_set(kind, b"test", b"asd");
 		assert_eq!(sp_io::offchain::local_storage_get(kind, b"test"), Some(b"asd".to_vec()));
@@ -161,7 +200,7 @@ primitives::wasm_export_functions! {
 	}
 
 	fn test_offchain_local_storage_with_none() {
-		let kind = primitives::offchain::StorageKind::PERSISTENT;
+		let kind = sp_core::offchain::StorageKind::PERSISTENT;
 		assert_eq!(sp_io::offchain::local_storage_get(kind, b"test"), None);
 
 		let res = sp_io::offchain::local_storage_compare_and_set(kind, b"test", None, b"value");
@@ -170,7 +209,7 @@ primitives::wasm_export_functions! {
 	}
 
 	fn test_offchain_http() -> bool {
-		use primitives::offchain::HttpRequestStatus;
+		use sp_core::offchain::HttpRequestStatus;
 		let run = || -> Option<()> {
 			let id = sp_io::offchain::http_request_start(
 				"POST",
@@ -196,50 +235,104 @@ primitives::wasm_export_functions! {
 
 		run().is_some()
 	}
+
+	// Just some test to make sure that `sp-allocator` compiles on `no_std`.
+	fn test_sp_allocator_compiles() {
+		sp_allocator::FreeingBumpHeapAllocator::new(0);
+	}
+
+	fn returns_mutable_static() -> u64 {
+		unsafe {
+			MUTABLE_STATIC += 1;
+			MUTABLE_STATIC
+		}
+	}
+
+	fn allocates_huge_stack_array(trap: bool) -> Vec<u8> {
+		// Allocate a stack frame that is approx. 75% of the stack (assuming it is 1MB).
+		// This will just decrease (stacks in wasm32-u-u grow downwards) the stack
+		// pointer. This won't trap on the current compilers.
+		let mut data = [0u8; 1024 * 768];
+
+		// Then make sure we actually write something to it.
+		//
+		// If:
+		// 1. the stack area is placed at the beginning of the linear memory space, and
+		// 2. the stack pointer points to out-of-bounds area, and
+		// 3. a write is performed around the current stack pointer.
+		//
+		// then a trap should happen.
+		//
+		for (i, v) in data.iter_mut().enumerate() {
+			*v = i as u8; // deliberate truncation
+		}
+
+		if trap {
+			// There is a small chance of this to be pulled up in theory. In practice
+			// the probability of that is rather low.
+			panic!()
+		}
+
+		data.to_vec()
+	}
+
+	// Check that the heap at `heap_base + offset` don't contains the test message.
+	// After the check succeeds the test message is written into the heap.
+	//
+	// It is expected that the given pointer is not allocated.
+	fn check_and_set_in_heap(heap_base: u32, offset: u32) {
+		let test_message = b"Hello invalid heap memory";
+		let ptr = unsafe { (heap_base + offset) as *mut u8 };
+
+		let message_slice = unsafe { sp_std::slice::from_raw_parts_mut(ptr, test_message.len()) };
+
+		assert_ne!(test_message, message_slice);
+		message_slice.copy_from_slice(test_message);
+	}
  }
 
 #[cfg(not(feature = "std"))]
 fn execute_sandboxed(
 	code: &[u8],
-	args: &[sandbox::TypedValue],
-) -> Result<sandbox::ReturnValue, sandbox::HostError> {
+	args: &[Value],
+) -> Result<sp_sandbox::ReturnValue, sp_sandbox::HostError> {
 	struct State {
 		counter: u32,
 	}
 
 	fn env_assert(
 		_e: &mut State,
-		args: &[sandbox::TypedValue],
-	) -> Result<sandbox::ReturnValue, sandbox::HostError> {
+		args: &[Value],
+	) -> Result<sp_sandbox::ReturnValue, sp_sandbox::HostError> {
 		if args.len() != 1 {
-			return Err(sandbox::HostError);
+			return Err(sp_sandbox::HostError);
 		}
-		let condition = args[0].as_i32().ok_or_else(|| sandbox::HostError)?;
+		let condition = args[0].as_i32().ok_or_else(|| sp_sandbox::HostError)?;
 		if condition != 0 {
-			Ok(sandbox::ReturnValue::Unit)
+			Ok(sp_sandbox::ReturnValue::Unit)
 		} else {
-			Err(sandbox::HostError)
+			Err(sp_sandbox::HostError)
 		}
 	}
 	fn env_inc_counter(
 		e: &mut State,
-		args: &[sandbox::TypedValue],
-	) -> Result<sandbox::ReturnValue, sandbox::HostError> {
+		args: &[Value],
+	) -> Result<sp_sandbox::ReturnValue, sp_sandbox::HostError> {
 		if args.len() != 1 {
-			return Err(sandbox::HostError);
+			return Err(sp_sandbox::HostError);
 		}
-		let inc_by = args[0].as_i32().ok_or_else(|| sandbox::HostError)?;
+		let inc_by = args[0].as_i32().ok_or_else(|| sp_sandbox::HostError)?;
 		e.counter += inc_by as u32;
-		Ok(sandbox::ReturnValue::Value(sandbox::TypedValue::I32(e.counter as i32)))
+		Ok(sp_sandbox::ReturnValue::Value(Value::I32(e.counter as i32)))
 	}
 
 	let mut state = State { counter: 0 };
 
 	let env_builder = {
-		let mut env_builder = sandbox::EnvironmentDefinitionBuilder::new();
+		let mut env_builder = sp_sandbox::EnvironmentDefinitionBuilder::new();
 		env_builder.add_host_func("env", "assert", env_assert);
 		env_builder.add_host_func("env", "inc_counter", env_inc_counter);
-		let memory = match sandbox::Memory::new(1, Some(16)) {
+		let memory = match sp_sandbox::Memory::new(1, Some(16)) {
 			Ok(m) => m,
 			Err(_) => unreachable!("
 				Memory::new() can return Err only if parameters are borked; \
@@ -251,8 +344,8 @@ fn execute_sandboxed(
 		env_builder
 	};
 
-	let mut instance = sandbox::Instance::new(code, &env_builder, &mut state)?;
+	let mut instance = sp_sandbox::Instance::new(code, &env_builder, &mut state)?;
 	let result = instance.invoke("call", args, &mut state);
 
-	result.map_err(|_| sandbox::HostError)
+	result.map_err(|_| sp_sandbox::HostError)
 }

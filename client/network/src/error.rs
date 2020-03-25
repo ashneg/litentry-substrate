@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -45,6 +45,8 @@ pub enum Error {
 		/// The second peer id that was found for the bootnode.
 		second_id: PeerId,
 	},
+	/// Prometheus metrics error.
+	Prometheus(prometheus_endpoint::PrometheusError)
 }
 
 // Make `Debug` use the `Display` implementation.
@@ -60,6 +62,7 @@ impl std::error::Error for Error {
 			Error::Io(ref err) => Some(err),
 			Error::Client(ref err) => Some(err),
 			Error::DuplicateBootnode { .. } => None,
+			Error::Prometheus(ref err) => Some(err),
 		}
 	}
 }

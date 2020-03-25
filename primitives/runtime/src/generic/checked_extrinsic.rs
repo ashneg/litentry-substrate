@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -20,14 +20,13 @@
 use crate::traits::{
 	self, Member, MaybeDisplay, SignedExtension, Dispatchable,
 };
-#[allow(deprecated)]
 use crate::traits::ValidateUnsigned;
-use crate::transaction_validity::TransactionValidity;
+use crate::transaction_validity::{TransactionValidity, TransactionSource};
 
 /// Definition of something that the external world might want to say; its
 /// existence implies that it has been checked and is good, particularly with
 /// regards to the signature.
-#[derive(PartialEq, Eq, Clone, primitives::RuntimeDebug)]
+#[derive(PartialEq, Eq, Clone, sp_core::RuntimeDebug)]
 pub struct CheckedExtrinsic<AccountId, Call, Extra> {
 	/// Who this purports to be from and the number of extrinsics have come before
 	/// from the same signer, if anyone (note this is not a signature).
@@ -46,17 +45,14 @@ where
 	Origin: From<Option<AccountId>>,
 	Info: Clone,
 {
-	type AccountId = AccountId;
 	type Call = Call;
 	type DispatchInfo = Info;
 
-	fn sender(&self) -> Option<&Self::AccountId> {
-		self.signed.as_ref().map(|x| &x.0)
-	}
-
-	#[allow(deprecated)] // Allow ValidateUnsigned
 	fn validate<U: ValidateUnsigned<Call = Self::Call>>(
 		&self,
+		// TODO [#5006;ToDr] should source be passed to `SignedExtension`s?
+		// Perhaps a change for 2.0 to avoid breaking too much APIs?
+		source: TransactionSource,
 		info: Self::DispatchInfo,
 		len: usize,
 	) -> TransactionValidity {
@@ -64,12 +60,11 @@ where
 			Extra::validate(extra, id, &self.function, info.clone(), len)
 		} else {
 			let valid = Extra::validate_unsigned(&self.function, info, len)?;
-			let unsigned_validation = U::validate_unsigned(&self.function)?;
+			let unsigned_validation = U::validate_unsigned(source, &self.function)?;
 			Ok(valid.combine_with(unsigned_validation))
 		}
 	}
 
-	#[allow(deprecated)] // Allow ValidateUnsigned
 	fn apply<U: ValidateUnsigned<Call=Self::Call>>(
 		self,
 		info: Self::DispatchInfo,

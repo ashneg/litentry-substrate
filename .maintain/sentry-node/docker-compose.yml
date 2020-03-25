@@ -26,6 +26,7 @@ services:
   validator-a:
     ports:
       - "9944:9944"
+      - "9615:9615"
     volumes:
       - ../../target/release/substrate:/usr/local/bin/substrate
     image: parity/substrate
@@ -47,8 +48,8 @@ services:
       - "--reserved-nodes"
       - "/dns4/sentry-a/tcp/30333/p2p/QmV7EhW6J6KgmNdr558RH1mPx2xGGznW7At4BhXzntRFsi"
       # Not only bind to localhost.
-      - "--ws-external"
-      - "--rpc-external"
+      - "--unsafe-ws-external"
+      - "--unsafe-rpc-external"
       # - "--log"
       # - "sub-libp2p=trace"
       # - "--log"
@@ -58,6 +59,7 @@ services:
       - "--no-telemetry"
       - "--rpc-cors"
       - "all"
+      - "--prometheus-external"
 
   sentry-a:
     image: parity/substrate
@@ -88,8 +90,8 @@ services:
       - "--rpc-cors"
       - "all"
       # Not only bind to localhost.
-      - "--ws-external"
-      - "--rpc-external"
+      - "--unsafe-ws-external"
+      - "--unsafe-rpc-external"
       - "--log"
       - "sub-authority-discovery=trace"
       - "--sentry"
@@ -121,8 +123,8 @@ services:
       - "--rpc-cors"
       - "all"
       # Not only bind to localhost.
-      - "--ws-external"
-      - "--rpc-external"
+      - "--unsafe-ws-external"
+      - "--unsafe-rpc-external"
       - "--log"
       - "sub-authority-discovery=trace"
 

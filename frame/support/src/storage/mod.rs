@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -23,7 +23,9 @@ use crate::{traits::Len, hash::{Twox128, StorageHasher}};
 pub mod unhashed;
 pub mod hashed;
 pub mod child;
+#[doc(hidden)]
 pub mod generator;
+pub mod migration;
 
 /// A trait for working with macro-generated storage values under the substrate storage API.
 ///
@@ -42,6 +44,10 @@ pub trait StorageValue<T: FullCodec> {
 	/// Load the value from the provided storage instance.
 	fn get() -> Self::Query;
 
+	/// Try to get the underlying value from the provided storage instance; `Ok` if it exists,
+	/// `Err` if not.
+	fn try_get() -> Result<T, ()>;
+
 	/// Translate a value from some previous type (`O`) to the current type.
 	///
 	/// `f: F` is the translation function.
@@ -59,13 +65,17 @@ pub trait StorageValue<T: FullCodec> {
 	///
 	/// # Usage
 	///
-	/// This would typically be called inside the module implementation of on_initialize, while
-	/// ensuring **no usage of this storage are made before the call to `on_initialize`**. (More
+	/// This would typically be called inside the module implementation of on_runtime_upgrade, while
+	/// ensuring **no usage of this storage are made before the call to `on_runtime_upgrade`**. (More
 	/// precisely prior initialized modules doesn't make use of this storage).
 	fn translate<O: Decode, F: FnOnce(Option<O>) -> Option<T>>(f: F) -> Result<Option<T>, ()>;
 
 	/// Store a value under this key into the provided storage instance.
 	fn put<Arg: EncodeLike<T>>(val: Arg);
+
+	/// Store a value under this key into the provided storage instance; this uses the query
+	/// type rather than the underlying value.
+	fn set(val: Self::Query);
 
 	/// Mutate the value
 	fn mutate<R, F: FnOnce(&mut Self::Query) -> R>(f: F) -> R;
@@ -125,7 +135,7 @@ pub trait StorageMap<K: FullEncode, V: FullCodec> {
 	fn hashed_key_for<KeyArg: EncodeLike<K>>(key: KeyArg) -> Vec<u8>;
 
 	/// Does the value (explicitly) exist in storage?
-	fn exists<KeyArg: EncodeLike<K>>(key: KeyArg) -> bool;
+	fn contains_key<KeyArg: EncodeLike<K>>(key: KeyArg) -> bool;
 
 	/// Load the value associated with the given key from the map.
 	fn get<KeyArg: EncodeLike<K>>(key: KeyArg) -> Self::Query;
@@ -142,14 +152,28 @@ pub trait StorageMap<K: FullEncode, V: FullCodec> {
 	/// Mutate the value under a key.
 	fn mutate<KeyArg: EncodeLike<K>, R, F: FnOnce(&mut Self::Query) -> R>(key: KeyArg, f: F) -> R;
 
+	/// Mutate the item, only if an `Ok` value is returned.
+	fn try_mutate<KeyArg: EncodeLike<K>, R, E, F: FnOnce(&mut Self::Query) -> Result<R, E>>(
+		key: KeyArg,
+		f: F,
+	) -> Result<R, E>;
+
+	/// Mutate the value under a key. Deletes the item if mutated to a `None`.
+	fn mutate_exists<KeyArg: EncodeLike<K>, R, F: FnOnce(&mut Option<V>) -> R>(key: KeyArg, f: F) -> R;
+
+	/// Mutate the item, only if an `Ok` value is returned. Deletes the item if mutated to a `None`.
+	fn try_mutate_exists<KeyArg: EncodeLike<K>, R, E, F: FnOnce(&mut Option<V>) -> Result<R, E>>(
+		key: KeyArg,
+		f: F,
+	) -> Result<R, E>;
+
 	/// Take the value under a key.
 	fn take<KeyArg: EncodeLike<K>>(key: KeyArg) -> Self::Query;
 
 	/// Append the given items to the value in the storage.
 	///
 	/// `V` is required to implement `codec::EncodeAppend`.
-	fn append<Items, Item, EncodeLikeItem, KeyArg>(key: KeyArg, items: Items) -> Result<(), &'static str>
-	where
+	fn append<Items, Item, EncodeLikeItem, KeyArg>(key: KeyArg, items: Items) -> Result<(), &'static str> where
 		KeyArg: EncodeLike<K>,
 		Item: Encode,
 		EncodeLikeItem: EncodeLike<Item>,
@@ -161,8 +185,7 @@ pub trait StorageMap<K: FullEncode, V: FullCodec> {
 	/// old (presumably corrupt) value is replaced with the given `items`.
 	///
 	/// `V` is required to implement `codec::EncodeAppend`.
-	fn append_or_insert<Items, Item, EncodeLikeItem, KeyArg>(key: KeyArg, items: Items)
-	where
+	fn append_or_insert<Items, Item, EncodeLikeItem, KeyArg>(key: KeyArg, items: Items) where
 		KeyArg: EncodeLike<K>,
 		Item: Encode,
 		EncodeLikeItem: EncodeLike<Item>,
@@ -175,82 +198,64 @@ pub trait StorageMap<K: FullEncode, V: FullCodec> {
 	/// `T` is required to implement `Codec::DecodeLength`.
 	///
 	/// Note that `0` is returned as the default value if no encoded value exists at the given key.
-	/// Therefore, this function cannot be used as a sign of _existence_. use the `::exists()`
+	/// Therefore, this function cannot be used as a sign of _existence_. use the `::contains_key()`
 	/// function for this purpose.
 	fn decode_len<KeyArg: EncodeLike<K>>(key: KeyArg) -> Result<usize, &'static str>
 		where V: codec::DecodeLength + Len;
+
+	/// Migrate an item with the given `key` from a defunct `OldHasher` to the current hasher.
+	///
+	/// If the key doesn't exist, then it's a no-op. If it does, then it returns its value.
+	fn migrate_key<OldHasher: StorageHasher, KeyArg: EncodeLike<K>>(key: KeyArg) -> Option<V>;
+
+	/// Migrate an item with the given `key` from a `blake2_256` hasher to the current hasher.
+	///
+	/// If the key doesn't exist, then it's a no-op. If it does, then it returns its value.
+	fn migrate_key_from_blake<KeyArg: EncodeLike<K>>(key: KeyArg) -> Option<V> {
+		Self::migrate_key::<crate::hash::Blake2_256, KeyArg>(key)
+	}
 }
 
-/// A strongly-typed linked map in storage.
-///
-/// Similar to `StorageMap` but allows to enumerate other elements and doesn't implement append.
-///
-/// Details on implementation can be found at
-/// [`generator::StorageLinkedMap`]
-pub trait StorageLinkedMap<K: FullCodec, V: FullCodec> {
-	/// The type that get/take return.
-	type Query;
-
+/// A strongly-typed map in storage whose keys and values can be iterated over.
+pub trait IterableStorageMap<K: FullEncode, V: FullCodec>: StorageMap<K, V> {
 	/// The type that iterates over all `(key, value)`.
-	type Enumerator: Iterator<Item = (K, V)>;
+	type Iterator: Iterator<Item = (K, V)>;
 
-	/// Does the value (explicitly) exist in storage?
-	fn exists<KeyArg: EncodeLike<K>>(key: KeyArg) -> bool;
+	/// Enumerate all elements in the map in no particular order. If you alter the map while doing
+	/// this, you'll get undefined results.
+	fn iter() -> Self::Iterator;
 
-	/// Load the value associated with the given key from the map.
-	fn get<KeyArg: EncodeLike<K>>(key: KeyArg) -> Self::Query;
+	/// Remove all elements from the map and iterate through them in no particular order. If you
+	/// add elements to the map while doing this, you'll get undefined results.
+	fn drain() -> Self::Iterator;
 
-	/// Swap the values of two keys.
-	fn swap<KeyArg1: EncodeLike<K>, KeyArg2: EncodeLike<K>>(key1: KeyArg1, key2: KeyArg2);
+	/// Translate the values of all elements by a function `f`, in the map in no particular order.
+	/// By returning `None` from `f` for an element, you'll remove it from the map.
+	fn translate<O: Decode, F: Fn(K, O) -> Option<V>>(f: F);
+}
 
-	/// Store a value to be associated with the given key from the map.
-	fn insert<KeyArg: EncodeLike<K>, ValArg: EncodeLike<V>>(key: KeyArg, val: ValArg);
+/// A strongly-typed double map in storage whose secondary keys and values can be iterated over.
+pub trait IterableStorageDoubleMap<
+	K1: FullCodec,
+	K2: FullCodec,
+	V: FullCodec
+>: StorageDoubleMap<K1, K2, V> {
+	/// The type that iterates over all `(key, value)`.
+	type Iterator: Iterator<Item = (K2, V)>;
 
-	/// Remove the value under a key.
-	fn remove<KeyArg: EncodeLike<K>>(key: KeyArg);
+	/// Enumerate all elements in the map with first key `k1` in no particular order. If you add or
+	/// remove values whose first key is `k1` to the map while doing this, you'll get undefined
+	/// results.
+	fn iter(k1: impl EncodeLike<K1>) -> Self::Iterator;
 
-	/// Mutate the value under a key.
-	fn mutate<KeyArg: EncodeLike<K>, R, F: FnOnce(&mut Self::Query) -> R>(key: KeyArg, f: F) -> R;
+	/// Remove all elements from the map with first key `k1` and iterate through them in no
+	/// particular order. If you add elements with first key `k1` to the map while doing this,
+	/// you'll get undefined results.
+	fn drain(k1: impl EncodeLike<K1>) -> Self::Iterator;
 
-	/// Take the value under a key.
-	fn take<KeyArg: EncodeLike<K>>(key: KeyArg) -> Self::Query;
-
-	/// Return current head element.
-	fn head() -> Option<K>;
-
-	/// Enumerate all elements in the map.
-	fn enumerate() -> Self::Enumerator;
-
-	/// Read the length of the value in a fast way, without decoding the entire value.
-	///
-	/// `T` is required to implement `Codec::DecodeLength`.
-	///
-	/// Note that `0` is returned as the default value if no encoded value exists at the given key.
-	/// Therefore, this function cannot be used as a sign of _existence_. use the `::exists()`
-	/// function for this purpose.
-	fn decode_len<KeyArg: EncodeLike<K>>(key: KeyArg) -> Result<usize, &'static str>
-		where V: codec::DecodeLength + Len;
-
-	/// Translate the keys and values from some previous `(K2, V2)` to the current type.
-	///
-	/// `TK` translates keys from the old type, and `TV` translates values.
-	///
-	/// Returns `Err` if the map could not be interpreted as the old type, and Ok if it could.
-	/// The `Err` contains the first key which could not be migrated, or `None` if the
-	/// head of the list could not be read.
-	///
-	/// # Warning
-	///
-	/// This function must be used with care, before being updated the storage still contains the
-	/// old type, thus other calls (such as `get`) will fail at decoding it.
-	///
-	/// # Usage
-	///
-	/// This would typically be called inside the module implementation of on_initialize, while
-	/// ensuring **no usage of this storage are made before the call to `on_initialize`**. (More
-	/// precisely prior initialized modules doesn't make use of this storage).
-	fn translate<K2, V2, TK, TV>(translate_key: TK, translate_val: TV) -> Result<(), Option<K2>>
-		where K2: FullCodec + Clone, V2: Decode, TK: Fn(K2) -> K, TV: Fn(V2) -> V;
+	/// Translate the values of all elements by a function `f`, in the map in no particular order.
+	/// By returning `None` from `f` for an element, you'll remove it from the map.
+	fn translate<O: Decode, F: Fn(O) -> Option<V>>(f: F);
 }
 
 /// An implementation of a map with a two keys.
@@ -269,7 +274,7 @@ pub trait StorageDoubleMap<K1: FullEncode, K2: FullEncode, V: FullCodec> {
 		KArg1: EncodeLike<K1>,
 		KArg2: EncodeLike<K2>;
 
-	fn exists<KArg1, KArg2>(k1: KArg1, k2: KArg2) -> bool
+	fn contains_key<KArg1, KArg2>(k1: KArg1, k2: KArg2) -> bool
 	where
 		KArg1: EncodeLike<K1>,
 		KArg2: EncodeLike<K2>;
@@ -304,6 +309,9 @@ pub trait StorageDoubleMap<K1: FullEncode, K2: FullEncode, V: FullCodec> {
 		KArg2: EncodeLike<K2>;
 
 	fn remove_prefix<KArg1>(k1: KArg1) where KArg1: ?Sized + EncodeLike<K1>;
+
+	fn iter_prefix<KArg1>(k1: KArg1) -> PrefixIterator<V>
+		where KArg1: ?Sized + EncodeLike<K1>;
 
 	fn mutate<KArg1, KArg2, R, F>(k1: KArg1, k2: KArg2, f: F) -> R
 	where
@@ -344,13 +352,24 @@ pub trait StorageDoubleMap<K1: FullEncode, K2: FullEncode, V: FullCodec> {
 	/// `V` is required to implement `Codec::DecodeLength`.
 	///
 	/// Note that `0` is returned as the default value if no encoded value exists at the given key.
-	/// Therefore, this function cannot be used as a sign of _existence_. use the `::exists()`
+	/// Therefore, this function cannot be used as a sign of _existence_. use the `::contains_key()`
 	/// function for this purpose.
 	fn decode_len<KArg1, KArg2>(key1: KArg1, key2: KArg2) -> Result<usize, &'static str>
 		where
 			KArg1: EncodeLike<K1>,
 			KArg2: EncodeLike<K2>,
 			V: codec::DecodeLength + Len;
+
+	/// Migrate an item with the given `key1` and `key2` from defunct `OldHasher1` and
+	/// `OldHasher2` to the current hashers.
+	///
+	/// If the key doesn't exist, then it's a no-op. If it does, then it returns its value.
+	fn migrate_keys<
+		OldHasher1: StorageHasher,
+		OldHasher2: StorageHasher,
+		KeyArg1: EncodeLike<K1>,
+		KeyArg2: EncodeLike<K2>,
+	>(key1: KeyArg1, key2: KeyArg2) -> Option<V>;
 }
 
 /// Iterator for prefixed map.
@@ -364,8 +383,10 @@ impl<Value: Decode> Iterator for PrefixIterator<Value> {
 	type Item = Value;
 
 	fn next(&mut self) -> Option<Self::Item> {
-		match sp_io::storage::next_key(&self.previous_key) {
-			Some(next_key) if next_key.starts_with(&self.prefix[..]) => {
+		match sp_io::storage::next_key(&self.previous_key)
+			.filter(|n| n.starts_with(&self.prefix[..]))
+		{
+			Some(next_key) => {
 				let value = unhashed::get(&next_key);
 
 				if value.is_none() {
@@ -398,6 +419,7 @@ pub trait StoragePrefixedMap<Value: FullCodec> {
 	/// Storage prefix. Used for generating final key.
 	fn storage_prefix() -> &'static [u8];
 
+	/// Final full prefix that prefixes all keys.
 	fn final_prefix() -> [u8; 32] {
 		let mut final_key = [0u8; 32];
 		final_key[0..16].copy_from_slice(&Twox128::hash(Self::module_prefix()));
@@ -405,11 +427,13 @@ pub trait StoragePrefixedMap<Value: FullCodec> {
 		final_key
 	}
 
+	/// Remove all value of the storage.
 	fn remove_all() {
 		sp_io::storage::clear_prefix(&Self::final_prefix())
 	}
 
-	fn iter() -> PrefixIterator<Value> {
+	/// Iter over all value of the storage.
+	fn iter_values() -> PrefixIterator<Value> {
 		let prefix = Self::final_prefix();
 		PrefixIterator {
 			prefix: prefix.to_vec(),
@@ -417,11 +441,56 @@ pub trait StoragePrefixedMap<Value: FullCodec> {
 			phantom_data: Default::default(),
 		}
 	}
+
+	/// Translate the values from some previous `OldValue` to the current type.
+	///
+	/// `TV` translates values.
+	///
+	/// Returns `Err` if the map could not be interpreted as the old type, and Ok if it could.
+	/// The `Err` contains the number of value that couldn't be interpreted, those value are
+	/// removed from the map.
+	///
+	/// # Warning
+	///
+	/// This function must be used with care, before being updated the storage still contains the
+	/// old type, thus other calls (such as `get`) will fail at decoding it.
+	///
+	/// # Usage
+	///
+	/// This would typically be called inside the module implementation of on_runtime_upgrade, while
+	/// ensuring **no usage of this storage are made before the call to `on_runtime_upgrade`**. (More
+	/// precisely prior initialized modules doesn't make use of this storage).
+	fn translate_values<OldValue, TV>(translate_val: TV) -> Result<(), u32>
+		where OldValue: Decode, TV: Fn(OldValue) -> Value
+	{
+		let prefix = Self::final_prefix();
+		let mut previous_key = prefix.to_vec();
+		let mut errors = 0;
+		while let Some(next_key) = sp_io::storage::next_key(&previous_key)
+			.filter(|n| n.starts_with(&prefix[..]))
+		{
+			if let Some(value) = unhashed::get(&next_key) {
+				unhashed::put(&next_key[..], &translate_val(value));
+			} else {
+				// We failed to read the value. Remove the key and increment errors.
+				unhashed::kill(&next_key[..]);
+				errors += 1;
+			}
+
+			previous_key = next_key;
+		}
+
+		if errors == 0 {
+			Ok(())
+		} else {
+			Err(errors)
+		}
+	}
 }
 
 #[cfg(test)]
 mod test {
-	use primitives::hashing::twox_128;
+	use sp_core::hashing::twox_128;
 	use sp_io::TestExternalities;
 	use crate::storage::{unhashed, StoragePrefixedMap};
 
@@ -458,18 +527,42 @@ mod test {
 			let k = [twox_128(b"MyModule"), twox_128(b"MyStorage")].concat();
 			assert_eq!(MyStorage::final_prefix().to_vec(), k);
 
-			assert_eq!(MyStorage::iter().collect::<Vec<_>>(), vec![]);
+			// test iteration
+			assert_eq!(MyStorage::iter_values().collect::<Vec<_>>(), vec![]);
 
 			unhashed::put(&[&k[..], &vec![1][..]].concat(), &1u64);
 			unhashed::put(&[&k[..], &vec![1, 1][..]].concat(), &2u64);
 			unhashed::put(&[&k[..], &vec![8][..]].concat(), &3u64);
 			unhashed::put(&[&k[..], &vec![10][..]].concat(), &4u64);
 
-			assert_eq!(MyStorage::iter().collect::<Vec<_>>(), vec![1, 2, 3, 4]);
+			assert_eq!(MyStorage::iter_values().collect::<Vec<_>>(), vec![1, 2, 3, 4]);
 
+			// test removal
+			MyStorage::remove_all();
+			assert_eq!(MyStorage::iter_values().collect::<Vec<_>>(), vec![]);
+
+			// test migration
+			unhashed::put(&[&k[..], &vec![1][..]].concat(), &1u32);
+			unhashed::put(&[&k[..], &vec![8][..]].concat(), &2u32);
+
+			assert_eq!(MyStorage::iter_values().collect::<Vec<_>>(), vec![]);
+			MyStorage::translate_values(|v: u32| v as u64).unwrap();
+			assert_eq!(MyStorage::iter_values().collect::<Vec<_>>(), vec![1, 2]);
 			MyStorage::remove_all();
 
-			assert_eq!(MyStorage::iter().collect::<Vec<_>>(), vec![]);
+			// test migration 2
+			unhashed::put(&[&k[..], &vec![1][..]].concat(), &1u128);
+			unhashed::put(&[&k[..], &vec![1, 1][..]].concat(), &2u64);
+			unhashed::put(&[&k[..], &vec![8][..]].concat(), &3u128);
+			unhashed::put(&[&k[..], &vec![10][..]].concat(), &4u32);
+
+			// (contains some value that successfully decoded to u64)
+			assert_eq!(MyStorage::iter_values().collect::<Vec<_>>(), vec![1, 2, 3]);
+			assert_eq!(MyStorage::translate_values(|v: u128| v as u64), Err(2));
+			assert_eq!(MyStorage::iter_values().collect::<Vec<_>>(), vec![1, 3]);
+			MyStorage::remove_all();
+
+			// test that other values are not modified.
 			assert_eq!(unhashed::get(&key_before[..]), Some(32u64));
 			assert_eq!(unhashed::get(&key_after[..]), Some(33u64));
 		});

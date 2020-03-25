@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@ use crate::mock::{
 	offence_reports,
 };
 use sp_runtime::Perbill;
-use system::{EventRecord, Phase};
+use frame_system::{EventRecord, Phase};
 
 #[test]
 fn should_report_an_authority_and_trigger_on_offence() {
@@ -40,7 +40,7 @@ fn should_report_an_authority_and_trigger_on_offence() {
 		};
 
 		// when
-		Offences::report_offence(vec![], offence);
+		Offences::report_offence(vec![], offence).unwrap();
 
 		// then
 		with_on_offence_fractions(|f| {
@@ -61,7 +61,7 @@ fn should_not_report_the_same_authority_twice_in_the_same_slot() {
 			time_slot,
 			offenders: vec![5],
 		};
-		Offences::report_offence(vec![], offence.clone());
+		Offences::report_offence(vec![], offence.clone()).unwrap();
 		with_on_offence_fractions(|f| {
 			assert_eq!(f.clone(), vec![Perbill::from_percent(25)]);
 			f.clear();
@@ -69,7 +69,7 @@ fn should_not_report_the_same_authority_twice_in_the_same_slot() {
 
 		// when
 		// report for the second time
-		Offences::report_offence(vec![], offence);
+		assert_eq!(Offences::report_offence(vec![], offence), Err(OffenceError::DuplicateReport));
 
 		// then
 		with_on_offence_fractions(|f| {
@@ -91,16 +91,16 @@ fn should_report_in_different_time_slot() {
 			time_slot,
 			offenders: vec![5],
 		};
-		Offences::report_offence(vec![], offence.clone());
+		Offences::report_offence(vec![], offence.clone()).unwrap();
 		with_on_offence_fractions(|f| {
 			assert_eq!(f.clone(), vec![Perbill::from_percent(25)]);
 			f.clear();
 		});
 
 		// when
-		// reportfor the second time
+		// report for the second time
 		offence.time_slot += 1;
-		Offences::report_offence(vec![], offence);
+		Offences::report_offence(vec![], offence).unwrap();
 
 		// then
 		with_on_offence_fractions(|f| {
@@ -123,13 +123,13 @@ fn should_deposit_event() {
 		};
 
 		// when
-		Offences::report_offence(vec![], offence);
+		Offences::report_offence(vec![], offence).unwrap();
 
 		// then
 		assert_eq!(
 			System::events(),
 			vec![EventRecord {
-				phase: Phase::ApplyExtrinsic(0),
+				phase: Phase::Initialization,
 				event: TestEvent::offences(crate::Event::Offence(KIND, time_slot.encode())),
 				topics: vec![],
 			}]
@@ -149,7 +149,7 @@ fn doesnt_deposit_event_for_dups() {
 			time_slot,
 			offenders: vec![5],
 		};
-		Offences::report_offence(vec![], offence.clone());
+		Offences::report_offence(vec![], offence.clone()).unwrap();
 		with_on_offence_fractions(|f| {
 			assert_eq!(f.clone(), vec![Perbill::from_percent(25)]);
 			f.clear();
@@ -157,14 +157,14 @@ fn doesnt_deposit_event_for_dups() {
 
 		// when
 		// report for the second time
-		Offences::report_offence(vec![], offence);
+		assert_eq!(Offences::report_offence(vec![], offence), Err(OffenceError::DuplicateReport));
 
 		// then
 		// there is only one event.
 		assert_eq!(
 			System::events(),
 			vec![EventRecord {
-				phase: Phase::ApplyExtrinsic(0),
+				phase: Phase::Initialization,
 				event: TestEvent::offences(crate::Event::Offence(KIND, time_slot.encode())),
 				topics: vec![],
 			}]
@@ -191,7 +191,7 @@ fn should_properly_count_offences() {
 			time_slot,
 			offenders: vec![4],
 		};
-		Offences::report_offence(vec![], offence1);
+		Offences::report_offence(vec![], offence1).unwrap();
 		with_on_offence_fractions(|f| {
 			assert_eq!(f.clone(), vec![Perbill::from_percent(25)]);
 			f.clear();
@@ -199,7 +199,7 @@ fn should_properly_count_offences() {
 
 		// when
 		// report for the second time
-		Offences::report_offence(vec![], offence2);
+		Offences::report_offence(vec![], offence2).unwrap();
 
 		// then
 		// the 1st authority should have count 2 and the 2nd one should be reported only once.

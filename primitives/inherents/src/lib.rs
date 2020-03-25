@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -64,7 +64,7 @@ impl Error {
 }
 
 /// An error that can occur within the inherent data system.
-#[derive(Encode, primitives::RuntimeDebug)]
+#[derive(Encode, sp_core::RuntimeDebug)]
 #[cfg(not(feature = "std"))]
 pub struct Error(&'static str);
 
@@ -146,6 +146,11 @@ impl InherentData {
 					.map(Some),
 			None => Ok(None)
 		}
+	}
+
+	/// Get the number of inherents in this instance
+	pub fn len(&self) -> usize {
+		self.data.len()
 	}
 }
 
@@ -307,7 +312,7 @@ impl InherentDataProviders {
 
 	/// Converts a given encoded error into a `String`.
 	///
-	/// Useful if the implementation encouters an error for an identifier it does not know.
+	/// Useful if the implementation encounters an error for an identifier it does not know.
 	pub fn error_to_string(&self, identifier: &InherentIdentifier, error: &[u8]) -> String {
 		let res = self.providers.read().iter().filter_map(|p|
 			if p.inherent_identifier() == identifier {

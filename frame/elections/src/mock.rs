@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -19,12 +19,12 @@
 #![cfg(test)]
 
 use std::cell::RefCell;
-use support::{
+use frame_support::{
 	StorageValue, StorageMap, parameter_types, assert_ok,
 	traits::{Get, ChangeMembers, Currency},
 	weights::Weight,
 };
-use primitives::H256;
+use sp_core::H256;
 use sp_runtime::{
 	Perbill, BuildStorage, testing::Header, traits::{BlakeTwo256, IdentityLookup, Block as BlockT},
 };
@@ -37,11 +37,11 @@ parameter_types! {
 	pub const MaximumBlockLength: u32 = 2 * 1024;
 	pub const AvailableBlockRatio: Perbill = Perbill::one();
 }
-impl system::Trait for Test {
+impl frame_system::Trait for Test {
 	type Origin = Origin;
+	type Call = ();
 	type Index = u64;
 	type BlockNumber = u64;
-	type Call = ();
 	type Hash = H256;
 	type Hashing = BlakeTwo256;
 	type AccountId = u64;
@@ -53,23 +53,21 @@ impl system::Trait for Test {
 	type MaximumBlockLength = MaximumBlockLength;
 	type AvailableBlockRatio = AvailableBlockRatio;
 	type Version = ();
+	type ModuleToIndex = ();
+	type AccountData = pallet_balances::AccountData<u64>;
+	type OnNewAccount = ();
+	type OnKilledAccount = ();
 }
 
 parameter_types! {
-	pub const ExistentialDeposit: u64 = 0;
-	pub const TransferFee: u64 = 0;
-	pub const CreationFee: u64 = 0;
+	pub const ExistentialDeposit: u64 = 1;
 }
-impl balances::Trait for Test {
+impl pallet_balances::Trait for Test {
 	type Balance = u64;
-	type OnNewAccount = ();
-	type OnFreeBalanceZero = ();
-	type Event = Event;
-	type TransferPayment = ();
 	type DustRemoval = ();
+	type Event = Event;
 	type ExistentialDeposit = ExistentialDeposit;
-	type TransferFee = TransferFee;
-	type CreationFee = CreationFee;
+	type AccountStore = System;
 }
 
 parameter_types! {
@@ -145,14 +143,15 @@ impl elections::Trait for Test {
 pub type Block = sp_runtime::generic::Block<Header, UncheckedExtrinsic>;
 pub type UncheckedExtrinsic = sp_runtime::generic::UncheckedExtrinsic<u32, u64, Call, ()>;
 
-support::construct_runtime!(
+use frame_system as system;
+frame_support::construct_runtime!(
 	pub enum Test where
 		Block = Block,
 		NodeBlock = Block,
 		UncheckedExtrinsic = UncheckedExtrinsic
 	{
-		System: system::{Module, Call, Event},
-		Balances: balances::{Module, Call, Event<T>, Config<T>, Error},
+		System: system::{Module, Call, Event<T>},
+		Balances: pallet_balances::{Module, Call, Event<T>, Config<T>},
 		Elections: elections::{Module, Call, Event<T>, Config<T>},
 	}
 );
@@ -210,7 +209,7 @@ impl ExtBuilder {
 		PRESENT_SLASH_PER_VOTER.with(|v| *v.borrow_mut() = self.bad_presentation_punishment);
 		DECAY_RATIO.with(|v| *v.borrow_mut() = self.decay_ratio);
 		GenesisConfig {
-			balances: Some(balances::GenesisConfig::<Test>{
+			pallet_balances: Some(pallet_balances::GenesisConfig::<Test>{
 				balances: vec![
 					(1, 10 * self.balance_factor),
 					(2, 20 * self.balance_factor),
@@ -219,7 +218,6 @@ impl ExtBuilder {
 					(5, 50 * self.balance_factor),
 					(6, 60 * self.balance_factor)
 				],
-				vesting: vec![],
 			}),
 			elections: Some(elections::GenesisConfig::<Test>{
 				members: vec![],

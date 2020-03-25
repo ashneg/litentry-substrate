@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -16,8 +16,8 @@
 
 use criterion::{Criterion, criterion_group, criterion_main, black_box};
 use frame_system as system;
-use support::{decl_module, decl_event, impl_outer_origin, impl_outer_event, weights::Weight};
-use primitives::H256;
+use frame_support::{decl_module, decl_event, impl_outer_origin, impl_outer_event, weights::Weight};
+use sp_core::H256;
 use sp_runtime::{Perbill, traits::{BlakeTwo256, IdentityLookup}, testing::Header};
 
 mod module {
@@ -46,11 +46,12 @@ impl_outer_origin!{
 
 impl_outer_event! {
 	pub enum Event for Runtime {
+		system<T>,
 		module,
 	}
 }
 
-support::parameter_types! {
+frame_support::parameter_types! {
 	pub const BlockHashCount: u64 = 250;
 	pub const MaximumBlockWeight: Weight = 4 * 1024 * 1024;
 	pub const MaximumBlockLength: u32 = 4 * 1024 * 1024;
@@ -74,6 +75,10 @@ impl system::Trait for Runtime {
 	type MaximumBlockLength = MaximumBlockLength;
 	type AvailableBlockRatio = AvailableBlockRatio;
 	type Version = ();
+	type ModuleToIndex = ();
+	type AccountData = ();
+	type OnNewAccount = ();
+	type OnKilledAccount = ();
 }
 
 impl module::Trait for Runtime {

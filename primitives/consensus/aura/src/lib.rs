@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -26,13 +26,14 @@ pub mod inherents;
 
 pub mod sr25519 {
 	mod app_sr25519 {
-		use app_crypto::{app_crypto, key_types::AURA, sr25519};
+		use sp_application_crypto::{app_crypto, key_types::AURA, sr25519};
 		app_crypto!(sr25519, AURA);
 	}
 
-	/// An Aura authority keypair using S/R 25519 as its crypto.
-	#[cfg(feature = "std")]
-	pub type AuthorityPair = app_sr25519::Pair;
+	sp_application_crypto::with_pair! {
+		/// An Aura authority keypair using S/R 25519 as its crypto.
+		pub type AuthorityPair = app_sr25519::Pair;
+	}
 
 	/// An Aura authority signature using S/R 25519 as its crypto.
 	pub type AuthoritySignature = app_sr25519::Signature;
@@ -43,13 +44,14 @@ pub mod sr25519 {
 
 pub mod ed25519 {
 	mod app_ed25519 {
-		use app_crypto::{app_crypto, key_types::AURA, ed25519};
+		use sp_application_crypto::{app_crypto, key_types::AURA, ed25519};
 		app_crypto!(ed25519, AURA);
 	}
 
-	/// An Aura authority keypair using Ed25519 as its crypto.
-	#[cfg(feature = "std")]
-	pub type AuthorityPair = app_ed25519::Pair;
+	sp_application_crypto::with_pair! {
+		/// An Aura authority keypair using Ed25519 as its crypto.
+		pub type AuthorityPair = app_ed25519::Pair;
+	}
 
 	/// An Aura authority signature using Ed25519 as its crypto.
 	pub type AuthoritySignature = app_ed25519::Signature;

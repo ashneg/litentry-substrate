@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -25,25 +25,27 @@ mod mock;
 mod tests;
 
 use sp_std::vec::Vec;
-use support::{
+use frame_support::{
 	decl_module, decl_event, decl_storage, Parameter,
+	weights::{Weight, SimpleDispatchInfo, WeighData},
 };
 use sp_runtime::traits::Hash;
 use sp_staking::{
-	offence::{Offence, ReportOffence, Kind, OnOffenceHandler, OffenceDetails},
+	offence::{Offence, ReportOffence, Kind, OnOffenceHandler, OffenceDetails, OffenceError},
 };
 use codec::{Encode, Decode};
+use frame_system as system;
 
 /// A binary blob which represents a SCALE codec-encoded `O::TimeSlot`.
 type OpaqueTimeSlot = Vec<u8>;
 
 /// A type alias for a report identifier.
-type ReportIdOf<T> = <T as system::Trait>::Hash;
+type ReportIdOf<T> = <T as frame_system::Trait>::Hash;
 
 /// Offences trait
-pub trait Trait: system::Trait {
+pub trait Trait: frame_system::Trait {
 	/// The overarching event type.
-	type Event: From<Event> + Into<<Self as system::Trait>::Event>;
+	type Event: From<Event> + Into<<Self as frame_system::Trait>::Event>;
 	/// Full identification of the validator.
 	type IdentificationTuple: Parameter + Ord;
 	/// A handler called for every offence report.
@@ -53,10 +55,14 @@ pub trait Trait: system::Trait {
 decl_storage! {
 	trait Store for Module<T: Trait> as Offences {
 		/// The primary structure that holds all offence records keyed by report identifiers.
-		Reports get(fn reports): map ReportIdOf<T> => Option<OffenceDetails<T::AccountId, T::IdentificationTuple>>;
+		Reports get(fn reports):
+			map hasher(twox_64_concat) ReportIdOf<T>
+			=> Option<OffenceDetails<T::AccountId, T::IdentificationTuple>>;
 
 		/// A vector of reports of the same kind that happened at the same time slot.
-		ConcurrentReportsIndex: double_map Kind, blake2_256(OpaqueTimeSlot) => Vec<ReportIdOf<T>>;
+		ConcurrentReportsIndex:
+			double_map hasher(twox_64_concat) Kind, hasher(twox_64_concat) OpaqueTimeSlot
+			=> Vec<ReportIdOf<T>>;
 
 		/// Enumerates all reports of a kind along with the time they happened.
 		///
@@ -64,7 +70,7 @@ decl_storage! {
 		///
 		/// Note that the actual type of this mapping is `Vec<u8>`, this is because values of
 		/// different types are not supported at the moment so we are doing the manual serialization.
-		ReportsByKindIndex: map Kind => Vec<u8>; // (O::TimeSlot, ReportIdOf<T>)
+		ReportsByKindIndex: map hasher(twox_64_concat) Kind => Vec<u8>; // (O::TimeSlot, ReportIdOf<T>)
 	}
 }
 
@@ -80,14 +86,23 @@ decl_module! {
 	/// Offences module, currently just responsible for taking offence reports.
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 		fn deposit_event() = default;
+
+		fn on_runtime_upgrade() -> Weight {
+			Reports::<T>::remove_all();
+			ConcurrentReportsIndex::<T>::remove_all();
+			ReportsByKindIndex::remove_all();
+
+			SimpleDispatchInfo::default().weigh_data(())
+		}
 	}
 }
+
 impl<T: Trait, O: Offence<T::IdentificationTuple>>
 	ReportOffence<T::AccountId, T::IdentificationTuple, O> for Module<T>
 where
 	T::IdentificationTuple: Clone,
 {
-	fn report_offence(reporters: Vec<T::AccountId>, offence: O) {
+	fn report_offence(reporters: Vec<T::AccountId>, offence: O) -> Result<(), OffenceError> {
 		let offenders = offence.offenders();
 		let time_slot = offence.time_slot();
 		let validator_set_count = offence.validator_set_count();
@@ -101,7 +116,7 @@ where
 		) {
 			Some(triage) => triage,
 			// The report contained only duplicates, so there is no need to slash again.
-			None => return,
+			None => return Err(OffenceError::DuplicateReport),
 		};
 
 		// Deposit the event.
@@ -120,6 +135,8 @@ where
 			&slash_perbill,
 			offence.session_index(),
 		);
+
+		Ok(())
 	}
 }
 
@@ -147,7 +164,7 @@ impl<T: Trait> Module<T> {
 		for offender in offenders {
 			let report_id = Self::report_id::<O>(time_slot, &offender);
 
-			if !<Reports<T>>::exists(&report_id) {
+			if !<Reports<T>>::contains_key(&report_id) {
 				any_new = true;
 				<Reports<T>>::insert(
 					&report_id,
@@ -184,7 +201,7 @@ struct TriageOutcome<T: Trait> {
 	concurrent_offenders: Vec<OffenceDetails<T::AccountId, T::IdentificationTuple>>,
 }
 
-/// An auxilary struct for working with storage of indexes localized for a specific offence
+/// An auxiliary struct for working with storage of indexes localized for a specific offence
 /// kind (specified by the `O` type parameter).
 ///
 /// This struct is responsible for aggregating storage writes and the underlying storage should not

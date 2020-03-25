@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -19,11 +19,9 @@
 use std::{self, error, result};
 use sp_state_machine;
 use sp_runtime::transaction_validity::TransactionValidityError;
-#[allow(deprecated)]
-use sp_block_builder_runtime_api::compatability_v3;
 use sp_consensus;
 use derive_more::{Display, From};
-use parity_scale_codec::Error as CodecError;
+use codec::Error as CodecError;
 
 /// Client Result type alias
 pub type Result<T> = result::Result<T, Error>;
@@ -37,7 +35,7 @@ pub enum ApplyExtrinsicFailed {
 	/// unappliable onto the current block.
 	#[display(fmt = "Extrinsic is not valid: {:?}", _0)]
 	Validity(TransactionValidityError),
-	/// This is used for miscelanious errors that can be represented by string and not handleable.
+	/// This is used for miscellaneous errors that can be represented by string and not handleable.
 	///
 	/// This will become obsolete with complete migration to v4 APIs.
 	#[display(fmt = "Extrinsic failed: {:?}", _0)]
@@ -106,6 +104,9 @@ pub enum Error {
 	/// Changes tries are not supported.
 	#[display(fmt = "Changes tries are not supported by the runtime")]
 	ChangesTriesNotSupported,
+	/// Error reading changes tries configuration.
+	#[display(fmt = "Error reading changes tries configuration")]
+	ErrorReadingChangesTriesConfig,
 	/// Key changes query has failed.
 	#[display(fmt = "Failed to check changes proof: {}", _0)]
 	#[from(ignore)]
@@ -123,6 +124,11 @@ pub enum Error {
 	/// Invalid calculated state root on block import.
 	#[display(fmt = "Calculated state root does not match.")]
 	InvalidStateRoot,
+	/// Incomplete block import pipeline.
+	#[display(fmt = "Incomplete block import pipeline.")]
+	IncompletePipeline,
+	#[display(fmt = "Transaction pool not ready for block production.")]
+	TransactionPoolNotReady,
 	/// A convenience variant for String
 	#[display(fmt = "{}", _0)]
 	Msg(String),
@@ -141,17 +147,6 @@ impl error::Error for Error {
 impl<'a> From<&'a str> for Error {
 	fn from(s: &'a str) -> Self {
 		Error::Msg(s.into())
-	}
-}
-
-#[allow(deprecated)]
-impl From<compatability_v3::ApplyError> for ApplyExtrinsicFailed {
-	fn from(e: compatability_v3::ApplyError) -> Self {
-		use self::compatability_v3::ApplyError::*;
-		match e {
-			Validity(tx_validity) => Self::Validity(tx_validity),
-			e => Self::Msg(format!("Apply extrinsic failed: {:?}", e)),
-		}
 	}
 }
 

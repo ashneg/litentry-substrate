@@ -1,5 +1,5 @@
 use sp_runtime::traits::GetNodeBlockType;
-use test_client::runtime::Block;
+use substrate_test_runtime_client::runtime::Block;
 
 /// The declaration of the `Runtime` type and the implementation of the `GetNodeBlockType`
 /// trait are done by the `construct_runtime!` macro in a real runtime.
@@ -17,7 +17,7 @@ sp_api::decl_runtime_apis! {
 mod second {
 	use super::*;
 
-	decl_runtime_apis! {
+	sp_api::decl_runtime_apis! {
 		pub trait Api {
 			fn test2(data: u64);
 		}

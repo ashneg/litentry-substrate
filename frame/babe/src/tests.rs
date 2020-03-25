@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -17,9 +17,11 @@
 //! Consensus extension module tests for BABE consensus.
 
 use super::*;
-use mock::{new_test_ext, Babe, Test};
-use sp_runtime::{traits::OnFinalize, testing::{Digest, DigestItem}};
-use session::ShouldEndSession;
+use frame_support::traits::OnFinalize;
+use mock::{new_test_ext, Babe, System};
+use sp_runtime::testing::{Digest, DigestItem};
+use sp_consensus_vrf::schnorrkel::{RawVRFOutput, RawVRFProof};
+use pallet_session::ShouldEndSession;
 
 const EMPTY_RANDOMNESS: [u8; 32] = [
 	74, 25, 49, 128, 53, 97, 244, 49,
@@ -29,18 +31,20 @@ const EMPTY_RANDOMNESS: [u8; 32] = [
 ];
 
 fn make_pre_digest(
-	authority_index: babe_primitives::AuthorityIndex,
-	slot_number: babe_primitives::SlotNumber,
-	vrf_output: [u8; babe_primitives::VRF_OUTPUT_LENGTH],
-	vrf_proof: [u8; babe_primitives::VRF_PROOF_LENGTH],
+	authority_index: sp_consensus_babe::AuthorityIndex,
+	slot_number: sp_consensus_babe::SlotNumber,
+	vrf_output: RawVRFOutput,
+	vrf_proof: RawVRFProof,
 ) -> Digest {
-	let digest_data = babe_primitives::RawBabePreDigest::Primary {
-		authority_index,
-		slot_number,
-		vrf_output,
-		vrf_proof,
-	};
-	let log = DigestItem::PreRuntime(babe_primitives::BABE_ENGINE_ID, digest_data.encode());
+	let digest_data = sp_consensus_babe::digests::RawPreDigest::Primary(
+		sp_consensus_babe::digests::RawPrimaryPreDigest {
+			authority_index,
+			slot_number,
+			vrf_output,
+			vrf_proof,
+		}
+	);
+	let log = DigestItem::PreRuntime(sp_consensus_babe::BABE_ENGINE_ID, digest_data.encode());
 	Digest { logs: vec![log] }
 }
 
@@ -66,22 +70,26 @@ fn check_module() {
 	})
 }
 
-type System = system::Module<Test>;
-
 #[test]
 fn first_block_epoch_zero_start() {
 	new_test_ext(vec![0, 1, 2, 3]).execute_with(|| {
 		let genesis_slot = 100;
-		let first_vrf = [1; 32];
+		let first_vrf = RawVRFOutput([1; 32]);
 		let pre_digest = make_pre_digest(
 			0,
 			genesis_slot,
-			first_vrf,
-			[0xff; 64],
+			first_vrf.clone(),
+			RawVRFProof([0xff; 64]),
 		);
 
 		assert_eq!(Babe::genesis_slot(), 0);
-		System::initialize(&1, &Default::default(), &Default::default(), &pre_digest);
+		System::initialize(
+			&1,
+			&Default::default(),
+			&Default::default(),
+			&pre_digest,
+			Default::default(),
+		);
 
 		// see implementation of the function for details why: we issue an
 		// epoch-change digest but don't do it via the normal session mechanism.
@@ -103,8 +111,8 @@ fn first_block_epoch_zero_start() {
 		assert_eq!(header.digest.logs[0], pre_digest.logs[0]);
 
 		let authorities = Babe::authorities();
-		let consensus_log = babe_primitives::ConsensusLog::NextEpochData(
-			babe_primitives::NextEpochDescriptor {
+		let consensus_log = sp_consensus_babe::ConsensusLog::NextEpochData(
+			sp_consensus_babe::digests::NextEpochDescriptor {
 				authorities,
 				randomness: Babe::randomness(),
 			}

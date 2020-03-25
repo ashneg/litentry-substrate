@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -20,10 +20,10 @@ use crate::{RuntimePublic, KeyTypeId};
 
 use sp_std::vec::Vec;
 
-pub use primitives::sr25519::*;
+pub use sp_core::sr25519::*;
 
 mod app {
-	use primitives::testing::SR25519;
+	use sp_core::testing::SR25519;
 	crate::app_crypto!(super, SR25519);
 
 	impl crate::traits::BoundToRuntimeAppPublic for Public {
@@ -52,5 +52,9 @@ impl RuntimePublic for Public {
 
 	fn verify<M: AsRef<[u8]>>(&self, msg: &M, signature: &Self::Signature) -> bool {
 		sp_io::crypto::sr25519_verify(&signature, msg.as_ref(), self)
+	}
+
+	fn to_raw_vec(&self) -> Vec<u8> {
+		sp_core::crypto::Public::to_raw_vec(self)
 	}
 }

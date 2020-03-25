@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -38,25 +38,20 @@ use rpc::{
 	futures::stream::Stream,
 };
 
-use api::Subscriptions;
-use client_api::backend::Backend;
-use sp_blockchain::Error as ClientError;
-use client::{
-	BlockchainEvents, Client, CallExecutor,
+use sc_rpc_api::Subscriptions;
+use sp_blockchain::{Error as ClientError, HeaderBackend};
+use sc_client::{
+	BlockchainEvents,
 	light::{
 		blockchain::{future_header, RemoteBlockchain},
 		fetcher::{Fetcher, RemoteCallRequest, RemoteReadRequest, RemoteReadChildRequest},
 	},
 };
-use primitives::{
-	H256, Blake2Hasher, Bytes, OpaqueMetadata,
-	storage::{StorageKey, StorageData, StorageChangeSet},
+use sp_core::{
+	Bytes, OpaqueMetadata, storage::{StorageKey, StorageData, StorageChangeSet},
 };
-use runtime_version::RuntimeVersion;
-use sp_runtime::{
-	generic::BlockId,
-	traits::Block as BlockT,
-};
+use sp_version::RuntimeVersion;
+use sp_runtime::{generic::BlockId, traits::{Block as BlockT, HashFor}};
 
 use super::{StateBackend, error::{FutureResult, Error}, client_err};
 
@@ -64,8 +59,8 @@ use super::{StateBackend, error::{FutureResult, Error}, client_err};
 type StorageMap = HashMap<StorageKey, Option<StorageData>>;
 
 /// State API backend for light nodes.
-pub struct LightState<Block: BlockT, F: Fetcher<Block>, B, E, RA> {
-	client: Arc<Client<B, E, Block, RA>>,
+pub struct LightState<Block: BlockT, F: Fetcher<Block>, Client> {
+	client: Arc<Client>,
 	subscriptions: Subscriptions,
 	version_subscriptions: SimpleSubscriptions<Block::Hash, RuntimeVersion>,
 	storage_subscriptions: Arc<Mutex<StorageSubscriptions<Block>>>,
@@ -138,16 +133,14 @@ impl<Hash, V> SharedRequests<Hash, V> for SimpleSubscriptions<Hash, V> where
 	}
 }
 
-impl<Block: BlockT, F: Fetcher<Block> + 'static, B, E, RA> LightState<Block, F, B, E, RA>
+impl<Block: BlockT, F: Fetcher<Block> + 'static, Client> LightState<Block, F, Client>
 	where
-		Block: BlockT<Hash=H256>,
-		B: Backend<Block, Blake2Hasher> + Send + Sync + 'static,
-		E: CallExecutor<Block, Blake2Hasher> + Send + Sync + 'static + Clone,
-		RA: Send + Sync + 'static,
+		Block: BlockT,
+		Client: HeaderBackend<Block> + Send + Sync + 'static,
 {
 	/// Create new state API backend for light nodes.
 	pub fn new(
-		client: Arc<Client<B, E, Block, RA>>,
+		client: Arc<Client>,
 		subscriptions: Subscriptions,
 		remote_blockchain: Arc<dyn RemoteBlockchain<Block>>,
 		fetcher: Arc<F>,
@@ -168,16 +161,14 @@ impl<Block: BlockT, F: Fetcher<Block> + 'static, B, E, RA> LightState<Block, F, 
 
 	/// Returns given block hash or best block hash if None is passed.
 	fn block_or_best(&self, hash: Option<Block::Hash>) -> Block::Hash {
-		hash.unwrap_or_else(|| self.client.info().chain.best_hash)
+		hash.unwrap_or_else(|| self.client.info().best_hash)
 	}
 }
 
-impl<Block, F, B, E, RA> StateBackend<B, E, Block, RA> for LightState<Block, F, B, E, RA>
+impl<Block, F, Client> StateBackend<Block, Client> for LightState<Block, F, Client>
 	where
-		Block: BlockT<Hash=H256>,
-		B: Backend<Block, Blake2Hasher> + Send + Sync + 'static,
-		E: CallExecutor<Block, Blake2Hasher> + Send + Sync + 'static + Clone,
-		RA: Send + Sync + 'static,
+		Block: BlockT,
+		Client: BlockchainEvents<Block> + HeaderBackend<Block> + Send + Sync + 'static,
 		F: Fetcher<Block> + 'static
 {
 	fn call(
@@ -199,6 +190,24 @@ impl<Block, F, B, E, RA> StateBackend<B, E, Block, RA> for LightState<Block, F, 
 		&self,
 		_block: Option<Block::Hash>,
 		_prefix: StorageKey,
+	) -> FutureResult<Vec<StorageKey>> {
+		Box::new(result(Err(client_err(ClientError::NotAvailableOnLightClient))))
+	}
+
+	fn storage_pairs(
+		&self,
+		_block: Option<Block::Hash>,
+		_prefix: StorageKey,
+	) -> FutureResult<Vec<(StorageKey, StorageData)>> {
+		Box::new(result(Err(client_err(ClientError::NotAvailableOnLightClient))))
+	}
+
+	fn storage_keys_paged(
+		&self,
+		_block: Option<Block::Hash>,
+		_prefix: Option<StorageKey>,
+		_count: u32,
+		_start_key: Option<StorageKey>,
 	) -> FutureResult<Vec<StorageKey>> {
 		Box::new(result(Err(client_err(ClientError::NotAvailableOnLightClient))))
 	}
@@ -227,7 +236,7 @@ impl<Block, F, B, E, RA> StateBackend<B, E, Block, RA> for LightState<Block, F, 
 		Box::new(self
 			.storage(block, key)
 			.and_then(|maybe_storage|
-				result(Ok(maybe_storage.map(|storage| Blake2Hasher::hash(&storage.0))))
+				result(Ok(maybe_storage.map(|storage| HashFor::<Block>::hash(&storage.0))))
 			)
 		)
 	}
@@ -236,6 +245,8 @@ impl<Block, F, B, E, RA> StateBackend<B, E, Block, RA> for LightState<Block, F, 
 		&self,
 		_block: Option<Block::Hash>,
 		_child_storage_key: StorageKey,
+		_child_info: StorageKey,
+		_child_type: u32,
 		_prefix: StorageKey,
 	) -> FutureResult<Vec<StorageKey>> {
 		Box::new(result(Err(client_err(ClientError::NotAvailableOnLightClient))))
@@ -245,6 +256,8 @@ impl<Block, F, B, E, RA> StateBackend<B, E, Block, RA> for LightState<Block, F, 
 		&self,
 		block: Option<Block::Hash>,
 		child_storage_key: StorageKey,
+		child_info: StorageKey,
+		child_type: u32,
 		key: StorageKey,
 	) -> FutureResult<Option<StorageData>> {
 		let block = self.block_or_best(block);
@@ -255,6 +268,8 @@ impl<Block, F, B, E, RA> StateBackend<B, E, Block, RA> for LightState<Block, F, 
 					block,
 					header,
 					storage_key: child_storage_key.0,
+					child_info: child_info.0,
+					child_type,
 					keys: vec![key.0.clone()],
 					retry_count: Default::default(),
 				}).then(move |result| ready(result
@@ -275,12 +290,14 @@ impl<Block, F, B, E, RA> StateBackend<B, E, Block, RA> for LightState<Block, F, 
 		&self,
 		block: Option<Block::Hash>,
 		child_storage_key: StorageKey,
+		child_info: StorageKey,
+		child_type: u32,
 		key: StorageKey,
 	) -> FutureResult<Option<Block::Hash>> {
 		Box::new(self
-			.child_storage(block, child_storage_key, key)
+			.child_storage(block, child_storage_key, child_info, child_type, key)
 			.and_then(|maybe_storage|
-				result(Ok(maybe_storage.map(|storage| Blake2Hasher::hash(&storage.0))))
+				result(Ok(maybe_storage.map(|storage| HashFor::<Block>::hash(&storage.0))))
 			)
 		)
 	}
@@ -321,8 +338,8 @@ impl<Block, F, B, E, RA> StateBackend<B, E, Block, RA> for LightState<Block, F, 
 		keys: Option<Vec<StorageKey>>
 	) {
 		let keys = match keys {
-			Some(keys) => keys,
-			None => {
+			Some(keys) if !keys.is_empty() => keys,
+			_ => {
 				warn!("Cannot subscribe to all keys on light client. Subscription rejected.");
 				return;
 			}
@@ -594,7 +611,7 @@ fn subscription_stream<
 	issue_request: IssueRequest,
 	compare_values: CompareValues,
 ) -> impl Stream<Item=N, Error=()> where
-	Block: BlockT<Hash=H256>,
+	Block: BlockT,
 	Requests: 'static + SharedRequests<Block::Hash, V>,
 	FutureBlocksStream: Stream<Item=Block::Hash, Error=()>,
 	V: Send + 'static + Clone,
@@ -703,7 +720,8 @@ fn ignore_error<F, T>(future: F) -> impl std::future::Future<Output=Result<Optio
 #[cfg(test)]
 mod tests {
 	use rpc::futures::stream::futures_ordered;
-	use test_client::runtime::Block;
+	use substrate_test_runtime_client::runtime::Block;
+	use sp_core::H256;
 	use super::*;
 
 	#[test]

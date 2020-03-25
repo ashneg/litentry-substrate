@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -61,6 +61,7 @@ pub mod ed25519;
 pub mod sr25519;
 pub mod ecdsa;
 pub mod hash;
+#[cfg(feature = "std")]
 mod hasher;
 pub mod offchain;
 pub mod sandbox;
@@ -69,22 +70,20 @@ mod changes_trie;
 #[cfg(feature = "std")]
 pub mod traits;
 pub mod testing;
-
-#[cfg(test)]
-mod tests;
+#[cfg(feature = "std")]
+pub mod tasks;
 
 pub use self::hash::{H160, H256, H512, convert_hash};
-pub use self::uint::U256;
-pub use changes_trie::ChangesTrieConfiguration;
+pub use self::uint::{U256, U512};
+pub use changes_trie::{ChangesTrieConfiguration, ChangesTrieConfigurationRange};
 #[cfg(feature = "full_crypto")]
 pub use crypto::{DeriveJunction, Pair, Public};
 
 pub use hash_db::Hasher;
-// Switch back to Blake after PoC-3 is out
-// pub use self::hasher::blake::BlakeHasher;
+#[cfg(feature = "std")]
 pub use self::hasher::blake2::Blake2Hasher;
 
-pub use primitives_storage as storage;
+pub use sp_storage as storage;
 
 #[doc(hidden)]
 pub use sp_std;
@@ -134,6 +133,15 @@ impl From<OpaqueMetadata> for Bytes {
 impl Deref for Bytes {
 	type Target = [u8];
 	fn deref(&self) -> &[u8] { &self.0[..] }
+}
+
+#[cfg(feature = "std")]
+impl sp_std::str::FromStr for Bytes {
+	type Err = bytes::FromHexError;
+
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		bytes::from_hex(s).map(Bytes)
+	}
 }
 
 /// Stores the encoded `RuntimeMetadata` for the native side as opaque type.
@@ -204,7 +212,7 @@ impl<R: PartialEq + codec::Decode> PartialEq for NativeOrEncoded<R> {
 }
 
 /// A value that is never in a native representation.
-/// This is type is useful in conjuction with `NativeOrEncoded`.
+/// This is type is useful in conjunction with `NativeOrEncoded`.
 #[cfg(feature = "std")]
 #[derive(PartialEq)]
 pub enum NeverNativeValue {}
@@ -236,7 +244,7 @@ pub trait TypeId {
 /// A log level matching the one from `log` crate.
 ///
 /// Used internally by `sp_io::log` method.
-#[derive(Encode, Decode, runtime_interface::pass_by::PassByEnum, Copy, Clone)]
+#[derive(Encode, Decode, sp_runtime_interface::pass_by::PassByEnum, Copy, Clone)]
 pub enum LogLevel {
 	/// `Error` log level.
 	Error = 1,
@@ -308,4 +316,44 @@ pub fn to_substrate_wasm_fn_return_value(value: &impl Encode) -> u64 {
 	sp_std::mem::forget(encoded);
 
 	res
+}
+
+/// Macro for creating `Maybe*` marker traits.
+///
+/// Such a maybe-marker trait requires the given bound when `feature = std` and doesn't require
+/// the bound on `no_std`. This is useful for situations where you require that a type implements
+/// a certain trait with `feature = std`, but not on `no_std`.
+///
+/// # Example
+///
+/// ```
+/// sp_core::impl_maybe_marker! {
+///     /// A marker for a type that implements `Debug` when `feature = std`.
+///     trait MaybeDebug: std::fmt::Debug;
+///     /// A marker for a type that implements `Debug + Display` when `feature = std`.
+///     trait MaybeDebugDisplay: std::fmt::Debug, std::fmt::Display;
+/// }
+/// ```
+#[macro_export]
+macro_rules! impl_maybe_marker {
+	(
+		$(
+			$(#[$doc:meta] )+
+			trait $trait_name:ident: $( $trait_bound:path ),+;
+		)+
+	) => {
+		$(
+			$(#[$doc])+
+			#[cfg(feature = "std")]
+			pub trait $trait_name: $( $trait_bound + )+ {}
+			#[cfg(feature = "std")]
+			impl<T: $( $trait_bound + )+> $trait_name for T {}
+
+			$(#[$doc])+
+			#[cfg(not(feature = "std"))]
+			pub trait $trait_name {}
+			#[cfg(not(feature = "std"))]
+			impl<T> $trait_name for T {}
+		)+
+	}
 }

@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -51,14 +51,14 @@
 //! This is an example of a module that exposes a privileged function:
 //!
 //! ```
-//! use support::{decl_module, dispatch};
-//! use system::ensure_root;
+//! use frame_support::{decl_module, dispatch};
+//! use frame_system::{self as system, ensure_root};
 //!
-//! pub trait Trait: system::Trait {}
+//! pub trait Trait: frame_system::Trait {}
 //!
 //! decl_module! {
 //!     pub struct Module<T: Trait> for enum Call where origin: T::Origin {
-//!         pub fn privileged_function(origin) -> dispatch::Result {
+//!         pub fn privileged_function(origin) -> dispatch::DispatchResult {
 //!             ensure_root(origin)?;
 //!
 //!             // do something...
@@ -77,7 +77,6 @@
 //!
 //! ## Related Modules
 //!
-//! * [Consensus](../frame_consensus/index.html)
 //! * [Democracy](../pallet_democracy/index.html)
 //!
 //! [`Call`]: ./enum.Call.html
@@ -87,26 +86,27 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use sp_std::prelude::*;
-use sp_runtime::{
-	traits::{StaticLookup, Dispatchable}, DispatchError,
-};
-use support::{
-	Parameter, decl_module, decl_event, decl_storage, ensure,
-	weights::SimpleDispatchInfo,
-};
-use system::ensure_signed;
+use sp_runtime::{traits::{StaticLookup, Dispatchable}, DispatchError};
 
-pub trait Trait: system::Trait {
+use frame_support::{
+	Parameter, decl_module, decl_event, decl_storage, decl_error, ensure,
+};
+use frame_support::weights::{GetDispatchInfo, FunctionOf};
+use frame_system::{self as system, ensure_signed};
+
+pub trait Trait: frame_system::Trait {
 	/// The overarching event type.
-	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
+	type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
 
 	/// A sudo-able call.
-	type Proposal: Parameter + Dispatchable<Origin=Self::Origin>;
+	type Call: Parameter + Dispatchable<Origin=Self::Origin> + GetDispatchInfo;
 }
 
 decl_module! {
 	// Simple declaration of the `Module` type. Lets the macro know what it's working on.
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
+		type Error = Error<T>;
+
 		fn deposit_event() = default;
 
 		/// Authenticates the sudo key and dispatches a function call with `Root` origin.
@@ -117,15 +117,19 @@ decl_module! {
 		/// - O(1).
 		/// - Limited storage reads.
 		/// - One DB write (event).
-		/// - Unknown weight of derivative `proposal` execution.
+		/// - Weight of derivative `call` execution + 10,000.
 		/// # </weight>
-		#[weight = SimpleDispatchInfo::FreeOperational]
-		fn sudo(origin, proposal: Box<T::Proposal>) {
+		#[weight = FunctionOf(
+			|args: (&Box<<T as Trait>::Call>,)| args.0.get_dispatch_info().weight + 10_000, 
+			|args: (&Box<<T as Trait>::Call>,)| args.0.get_dispatch_info().class,
+			true
+		)]
+		fn sudo(origin, call: Box<<T as Trait>::Call>) {
 			// This is a public call, so we ensure that the origin is some signed account.
 			let sender = ensure_signed(origin)?;
-			ensure!(sender == Self::key(), "only the current sudo key can sudo");
+			ensure!(sender == Self::key(), Error::<T>::RequireSudo);
 
-			let res = match proposal.dispatch(system::RawOrigin::Root.into()) {
+			let res = match call.dispatch(frame_system::RawOrigin::Root.into()) {
 				Ok(_) => true,
 				Err(e) => {
 					let e: DispatchError = e.into();
@@ -149,7 +153,7 @@ decl_module! {
 		fn set_key(origin, new: <T::Lookup as StaticLookup>::Source) {
 			// This is a public call, so we ensure that the origin is some signed account.
 			let sender = ensure_signed(origin)?;
-			ensure!(sender == Self::key(), "only the current sudo key can change the sudo key");
+			ensure!(sender == Self::key(), Error::<T>::RequireSudo);
 			let new = T::Lookup::lookup(new)?;
 
 			Self::deposit_event(RawEvent::KeyChanged(Self::key()));
@@ -165,17 +169,25 @@ decl_module! {
 		/// - O(1).
 		/// - Limited storage reads.
 		/// - One DB write (event).
-		/// - Unknown weight of derivative `proposal` execution.
+		/// - Weight of derivative `call` execution + 10,000.
 		/// # </weight>
-		#[weight = SimpleDispatchInfo::FixedOperational(0)]
-		fn sudo_as(origin, who: <T::Lookup as StaticLookup>::Source, proposal: Box<T::Proposal>) {
+		#[weight = FunctionOf(
+			|args: (&<T::Lookup as StaticLookup>::Source, &Box<<T as Trait>::Call>,)| {
+				args.1.get_dispatch_info().weight + 10_000
+			}, 
+			|args: (&<T::Lookup as StaticLookup>::Source, &Box<<T as Trait>::Call>,)| {
+				args.1.get_dispatch_info().class
+			},
+			true
+		)]
+		fn sudo_as(origin, who: <T::Lookup as StaticLookup>::Source, call: Box<<T as Trait>::Call>) {
 			// This is a public call, so we ensure that the origin is some signed account.
 			let sender = ensure_signed(origin)?;
-			ensure!(sender == Self::key(), "only the current sudo key can sudo");
+			ensure!(sender == Self::key(), Error::<T>::RequireSudo);
 
 			let who = T::Lookup::lookup(who)?;
 
-			let res = match proposal.dispatch(system::RawOrigin::Signed(who).into()) {
+			let res = match call.dispatch(frame_system::RawOrigin::Signed(who).into()) {
 				Ok(_) => true,
 				Err(e) => {
 					let e: DispatchError = e.into();
@@ -190,7 +202,7 @@ decl_module! {
 }
 
 decl_event!(
-	pub enum Event<T> where AccountId = <T as system::Trait>::AccountId {
+	pub enum Event<T> where AccountId = <T as frame_system::Trait>::AccountId {
 		/// A sudo just took place.
 		Sudid(bool),
 		/// The sudoer just switched identity; the old key is supplied.
@@ -204,5 +216,13 @@ decl_storage! {
 	trait Store for Module<T: Trait> as Sudo {
 		/// The `AccountId` of the sudo key.
 		Key get(fn key) config(): T::AccountId;
+	}
+}
+
+decl_error! {
+	/// Error for the Sudo module
+	pub enum Error for Module<T: Trait> {
+		/// Sender must be the Sudo account
+		RequireSudo,
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -16,8 +16,9 @@
 
 use sp_std::prelude::*;
 use sp_std::borrow::Borrow;
-use codec::{Ref, FullCodec, FullEncode, Encode, EncodeLike, EncodeAppend};
-use crate::{storage::{self, unhashed}, hash::{StorageHasher, Twox128}, traits::Len};
+use codec::{Ref, FullCodec, FullEncode, Decode, Encode, EncodeLike, EncodeAppend};
+use crate::{storage::{self, unhashed}, traits::Len};
+use crate::hash::{StorageHasher, Twox128, ReversibleStorageHasher};
 
 /// Generator for `StorageDoubleMap` used by `decl_storage`.
 ///
@@ -55,6 +56,22 @@ pub trait StorageDoubleMap<K1: FullEncode, K2: FullEncode, V: FullCodec> {
 	/// Storage prefix. Used for generating final key.
 	fn storage_prefix() -> &'static [u8];
 
+	/// The full prefix; just the hash of `module_prefix` concatenated to the hash of
+	/// `storage_prefix`.
+	fn prefix_hash() -> Vec<u8> {
+		let module_prefix_hashed = Twox128::hash(Self::module_prefix());
+		let storage_prefix_hashed = Twox128::hash(Self::storage_prefix());
+
+		let mut result = Vec::with_capacity(
+			module_prefix_hashed.len() + storage_prefix_hashed.len()
+		);
+
+		result.extend_from_slice(&module_prefix_hashed[..]);
+		result.extend_from_slice(&storage_prefix_hashed[..]);
+
+		result
+	}
+
 	/// Convert an optional value retrieved from storage to the type queried.
 	fn from_optional_value_to_query(v: Option<V>) -> Self::Query;
 
@@ -62,8 +79,7 @@ pub trait StorageDoubleMap<K1: FullEncode, K2: FullEncode, V: FullCodec> {
 	fn from_query_to_optional_value(v: Self::Query) -> Option<V>;
 
 	/// Generate the first part of the key used in top storage.
-	fn storage_double_map_final_key1<KArg1>(k1: KArg1) -> Vec<u8>
-	where
+	fn storage_double_map_final_key1<KArg1>(k1: KArg1) -> Vec<u8> where
 		KArg1: EncodeLike<K1>,
 	{
 		let module_prefix_hashed = Twox128::hash(Self::module_prefix());
@@ -82,19 +98,32 @@ pub trait StorageDoubleMap<K1: FullEncode, K2: FullEncode, V: FullCodec> {
 	}
 
 	/// Generate the full key used in top storage.
-	fn storage_double_map_final_key<KArg1, KArg2>(k1: KArg1, k2: KArg2) -> Vec<u8>
-	where
+	fn storage_double_map_final_key<KArg1, KArg2>(k1: KArg1, k2: KArg2) -> Vec<u8> where
 		KArg1: EncodeLike<K1>,
 		KArg2: EncodeLike<K2>,
 	{
-		let mut final_key = Self::storage_double_map_final_key1(k1);
-		final_key.extend_from_slice(k2.using_encoded(Self::Hasher2::hash).as_ref());
+		let module_prefix_hashed = Twox128::hash(Self::module_prefix());
+		let storage_prefix_hashed = Twox128::hash(Self::storage_prefix());
+		let key1_hashed = k1.borrow().using_encoded(Self::Hasher1::hash);
+		let key2_hashed = k2.borrow().using_encoded(Self::Hasher2::hash);
+
+		let mut final_key = Vec::with_capacity(
+			module_prefix_hashed.len()
+				+ storage_prefix_hashed.len()
+				+ key1_hashed.as_ref().len()
+				+ key2_hashed.as_ref().len()
+		);
+
+		final_key.extend_from_slice(&module_prefix_hashed[..]);
+		final_key.extend_from_slice(&storage_prefix_hashed[..]);
+		final_key.extend_from_slice(key1_hashed.as_ref());
+		final_key.extend_from_slice(key2_hashed.as_ref());
+
 		final_key
 	}
 }
 
-impl<K1, K2, V, G> storage::StorageDoubleMap<K1, K2, V> for G
-where
+impl<K1, K2, V, G> storage::StorageDoubleMap<K1, K2, V> for G where
 	K1: FullEncode,
 	K2: FullEncode,
 	V: FullCodec,
@@ -102,32 +131,28 @@ where
 {
 	type Query = G::Query;
 
-	fn hashed_key_for<KArg1, KArg2>(k1: KArg1, k2: KArg2) -> Vec<u8>
-	where
+	fn hashed_key_for<KArg1, KArg2>(k1: KArg1, k2: KArg2) -> Vec<u8> where
 		KArg1: EncodeLike<K1>,
 		KArg2: EncodeLike<K2>,
 	{
 		Self::storage_double_map_final_key(k1, k2)
 	}
 
-	fn exists<KArg1, KArg2>(k1: KArg1, k2: KArg2) -> bool
-	where
+	fn contains_key<KArg1, KArg2>(k1: KArg1, k2: KArg2) -> bool where
 		KArg1: EncodeLike<K1>,
 		KArg2: EncodeLike<K2>,
 	{
 		unhashed::exists(&Self::storage_double_map_final_key(k1, k2))
 	}
 
-	fn get<KArg1, KArg2>(k1: KArg1, k2: KArg2) -> Self::Query
-	where
+	fn get<KArg1, KArg2>(k1: KArg1, k2: KArg2) -> Self::Query where
 		KArg1: EncodeLike<K1>,
 		KArg2: EncodeLike<K2>,
 	{
 		G::from_optional_value_to_query(unhashed::get(&Self::storage_double_map_final_key(k1, k2)))
 	}
 
-	fn take<KArg1, KArg2>(k1: KArg1, k2: KArg2) -> Self::Query
-	where
+	fn take<KArg1, KArg2>(k1: KArg1, k2: KArg2) -> Self::Query where
 		KArg1: EncodeLike<K1>,
 		KArg2: EncodeLike<K2>,
 	{
@@ -137,8 +162,12 @@ where
 		G::from_optional_value_to_query(value)
 	}
 
-	fn swap<XKArg1, XKArg2, YKArg1, YKArg2>(x_k1: XKArg1, x_k2: XKArg2, y_k1: YKArg1, y_k2: YKArg2)
-	where
+	fn swap<XKArg1, XKArg2, YKArg1, YKArg2>(
+		x_k1: XKArg1,
+		x_k2: XKArg2,
+		y_k1: YKArg1,
+		y_k2: YKArg2
+	) where
 		XKArg1: EncodeLike<K1>,
 		XKArg2: EncodeLike<K2>,
 		YKArg1: EncodeLike<K1>,
@@ -160,8 +189,7 @@ where
 		}
 	}
 
-	fn insert<KArg1, KArg2, VArg>(k1: KArg1, k2: KArg2, val: VArg)
-	where
+	fn insert<KArg1, KArg2, VArg>(k1: KArg1, k2: KArg2, val: VArg) where
 		KArg1: EncodeLike<K1>,
 		KArg2: EncodeLike<K2>,
 		VArg: EncodeLike<V>,
@@ -169,8 +197,7 @@ where
 		unhashed::put(&Self::storage_double_map_final_key(k1, k2), &val.borrow())
 	}
 
-	fn remove<KArg1, KArg2>(k1: KArg1, k2: KArg2)
-	where
+	fn remove<KArg1, KArg2>(k1: KArg1, k2: KArg2) where
 		KArg1: EncodeLike<K1>,
 		KArg2: EncodeLike<K2>,
 	{
@@ -181,8 +208,18 @@ where
 		unhashed::kill_prefix(Self::storage_double_map_final_key1(k1).as_ref())
 	}
 
-	fn mutate<KArg1, KArg2, R, F>(k1: KArg1, k2: KArg2, f: F) -> R
-	where
+	fn iter_prefix<KArg1>(k1: KArg1) -> storage::PrefixIterator<V> where
+		KArg1: ?Sized + EncodeLike<K1>
+	{
+		let prefix = Self::storage_double_map_final_key1(k1);
+		storage::PrefixIterator::<V> {
+			prefix: prefix.clone(),
+			previous_key: prefix,
+			phantom_data: Default::default(),
+		}
+	}
+
+	fn mutate<KArg1, KArg2, R, F>(k1: KArg1, k2: KArg2, f: F) -> R where
 		KArg1: EncodeLike<K1>,
 		KArg2: EncodeLike<K2>,
 		F: FnOnce(&mut Self::Query) -> R,
@@ -202,8 +239,7 @@ where
 		k1: KArg1,
 		k2: KArg2,
 		items: Items,
-	) -> Result<(), &'static str>
-	where
+	) -> Result<(), &'static str> where
 		KArg1: EncodeLike<K1>,
 		KArg2: EncodeLike<K2>,
 		Item: Encode,
@@ -235,8 +271,7 @@ where
 		k1: KArg1,
 		k2: KArg2,
 		items: Items,
-	)
-	where
+	) where
 		KArg1: EncodeLike<K1>,
 		KArg2: EncodeLike<K2>,
 		Item: Encode,
@@ -249,10 +284,10 @@ where
 			.unwrap_or_else(|_| Self::insert(k1, k2, items));
 	}
 
-	fn decode_len<KArg1, KArg2>(key1: KArg1, key2: KArg2) -> Result<usize, &'static str>
-		where KArg1: EncodeLike<K1>,
-		      KArg2: EncodeLike<K2>,
-		      V: codec::DecodeLength + Len,
+	fn decode_len<KArg1, KArg2>(key1: KArg1, key2: KArg2) -> Result<usize, &'static str> where
+		KArg1: EncodeLike<K1>,
+		KArg2: EncodeLike<K2>,
+		V: codec::DecodeLength + Len,
 	{
 		let final_key = Self::storage_double_map_final_key(key1, key2);
 		if let Some(v) = unhashed::get_raw(&final_key) {
@@ -264,5 +299,165 @@ where
 
 			Ok(len)
 		}
+	}
+
+	fn migrate_keys<
+		OldHasher1: StorageHasher,
+		OldHasher2: StorageHasher,
+		KeyArg1: EncodeLike<K1>,
+		KeyArg2: EncodeLike<K2>,
+	>(key1: KeyArg1, key2: KeyArg2) -> Option<V> {
+		let old_key = {
+			let module_prefix_hashed = Twox128::hash(Self::module_prefix());
+			let storage_prefix_hashed = Twox128::hash(Self::storage_prefix());
+			let key1_hashed = key1.borrow().using_encoded(OldHasher1::hash);
+			let key2_hashed = key2.borrow().using_encoded(OldHasher2::hash);
+
+			let mut final_key = Vec::with_capacity(
+				module_prefix_hashed.len()
+					+ storage_prefix_hashed.len()
+					+ key1_hashed.as_ref().len()
+					+ key2_hashed.as_ref().len()
+			);
+
+			final_key.extend_from_slice(&module_prefix_hashed[..]);
+			final_key.extend_from_slice(&storage_prefix_hashed[..]);
+			final_key.extend_from_slice(key1_hashed.as_ref());
+			final_key.extend_from_slice(key2_hashed.as_ref());
+
+			final_key
+		};
+		unhashed::take(old_key.as_ref()).map(|value| {
+			unhashed::put(Self::storage_double_map_final_key(key1, key2).as_ref(), &value);
+			value
+		})
+	}
+}
+
+/// Utility to iterate through items in a storage map.
+pub struct MapIterator<K, V, Hasher> {
+	prefix: Vec<u8>,
+	previous_key: Vec<u8>,
+	drain: bool,
+	_phantom: ::sp_std::marker::PhantomData<(K, V, Hasher)>,
+}
+
+impl<
+	K: Decode + Sized,
+	V: Decode + Sized,
+	Hasher: ReversibleStorageHasher
+> Iterator for MapIterator<K, V, Hasher> {
+	type Item = (K, V);
+
+	fn next(&mut self) -> Option<(K, V)> {
+		loop {
+			let maybe_next = sp_io::storage::next_key(&self.previous_key)
+				.filter(|n| n.starts_with(&self.prefix));
+			break match maybe_next {
+				Some(next) => {
+					self.previous_key = next;
+					match unhashed::get::<V>(&self.previous_key) {
+						Some(value) => {
+							if self.drain {
+								unhashed::kill(&self.previous_key)
+							}
+							let mut key_material = Hasher::reverse(&self.previous_key[self.prefix.len()..]);
+							match K::decode(&mut key_material) {
+								Ok(key) => Some((key, value)),
+								Err(_) => continue,
+							}
+						}
+						None => continue,
+					}
+				}
+				None => None,
+			}
+		}
+	}
+}
+
+impl<
+	K1: FullCodec,
+	K2: FullCodec,
+	V: FullCodec,
+	G: StorageDoubleMap<K1, K2, V>,
+> storage::IterableStorageDoubleMap<K1, K2, V> for G where
+	G::Hasher1: ReversibleStorageHasher,
+	G::Hasher2: ReversibleStorageHasher
+{
+	type Iterator = MapIterator<K2, V, G::Hasher2>;
+
+	/// Enumerate all elements in the map.
+	fn iter(k1: impl EncodeLike<K1>) -> Self::Iterator {
+		let prefix = G::storage_double_map_final_key1(k1);
+		Self::Iterator {
+			prefix: prefix.clone(),
+			previous_key: prefix,
+			drain: false,
+			_phantom: Default::default(),
+		}
+	}
+
+	/// Enumerate all elements in the map.
+	fn drain(k1: impl EncodeLike<K1>) -> Self::Iterator {
+		let prefix = G::storage_double_map_final_key1(k1);
+		Self::Iterator {
+			prefix: prefix.clone(),
+			previous_key: prefix,
+			drain: true,
+			_phantom: Default::default(),
+		}
+	}
+
+	fn translate<O: Decode, F: Fn(O) -> Option<V>>(f: F) {
+		let prefix = G::prefix_hash();
+		let mut previous_key = prefix.clone();
+		loop {
+			match sp_io::storage::next_key(&previous_key).filter(|n| n.starts_with(&prefix)) {
+				Some(next) => {
+					previous_key = next;
+					let maybe_value = unhashed::get::<O>(&previous_key);
+					match maybe_value {
+						Some(value) => match f(value) {
+							Some(new) => unhashed::put::<V>(&previous_key, &new),
+							None => unhashed::kill(&previous_key),
+						},
+						None => continue,
+					}
+				}
+				None => return,
+			}
+		}
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use sp_io::TestExternalities;
+	use crate::storage::{self, StorageDoubleMap};
+	use crate::hash::Twox128;
+
+	#[test]
+	fn iter_prefix_works() {
+		TestExternalities::default().execute_with(|| {
+			struct MyStorage;
+			impl storage::generator::StorageDoubleMap<u64, u64, u64> for MyStorage {
+				type Query = Option<u64>;
+				fn module_prefix() -> &'static [u8] { b"MyModule" }
+				fn storage_prefix() -> &'static [u8] { b"MyStorage" }
+				type Hasher1 = Twox128;
+				type Hasher2 = Twox128;
+				fn from_optional_value_to_query(v: Option<u64>) -> Self::Query { v }
+				fn from_query_to_optional_value(v: Self::Query) -> Option<u64> { v }
+			}
+
+			MyStorage::insert(1, 3, 7);
+			MyStorage::insert(1, 4, 8);
+			MyStorage::insert(2, 5, 9);
+			MyStorage::insert(2, 6, 10);
+
+			assert_eq!(MyStorage::iter_prefix(1).collect::<Vec<_>>(), vec![7, 8]);
+			assert_eq!(MyStorage::iter_prefix(2).collect::<Vec<_>>(), vec![10, 9]);
+		});
 	}
 }

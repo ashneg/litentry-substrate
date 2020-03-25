@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -14,26 +14,29 @@
 // You should have received a copy of the GNU General Public License
 // along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
 
-//! Utilites to build a `TestClient` for `node-runtime`.
+//! Utilities to build a `TestClient` for `node-runtime`.
 
 use sp_runtime::BuildStorage;
 
 /// Re-export test-client utilities.
-pub use test_client::*;
+pub use substrate_test_client::*;
 
 /// Call executor for `node-runtime` `TestClient`.
 pub type Executor = sc_executor::NativeExecutor<node_executor::Executor>;
 
 /// Default backend type.
-pub type Backend = client_db::Backend<node_primitives::Block>;
+pub type Backend = sc_client_db::Backend<node_primitives::Block>;
 
 /// Test client type.
-pub type Client = client::Client<
+pub type Client = sc_client::Client<
 	Backend,
-	client::LocalCallExecutor<Backend, Executor>,
+	sc_client::LocalCallExecutor<Backend, Executor>,
 	node_primitives::Block,
 	node_runtime::RuntimeApi,
 >;
+
+/// Transaction for node-runtime.
+pub type Transaction = sc_client_api::backend::TransactionFor<Backend, node_primitives::Block>;
 
 /// Genesis configuration parameters for `TestClient`.
 #[derive(Default)]
@@ -41,8 +44,8 @@ pub struct GenesisParameters {
 	support_changes_trie: bool,
 }
 
-impl test_client::GenesisInit for GenesisParameters {
-	fn genesis_storage(&self) -> (StorageOverlay, ChildrenStorageOverlay) {
+impl substrate_test_client::GenesisInit for GenesisParameters {
+	fn genesis_storage(&self) -> Storage {
 		crate::genesis::config(self.support_changes_trie, None).build_storage().unwrap()
 	}
 }
@@ -56,8 +59,9 @@ pub trait TestClientBuilderExt: Sized {
 	fn build(self) -> Client;
 }
 
-impl TestClientBuilderExt for test_client::TestClientBuilder<
-	client::LocalCallExecutor<Backend, Executor>,
+impl TestClientBuilderExt for substrate_test_client::TestClientBuilder<
+	node_primitives::Block,
+	sc_client::LocalCallExecutor<Backend, Executor>,
 	Backend,
 	GenesisParameters,
 > {
