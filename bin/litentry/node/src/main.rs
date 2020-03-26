@@ -12,9 +12,9 @@ fn main() -> sc_cli::Result<()> {
 		name: "Substrate Node",
 		commit: env!("VERGEN_SHA_SHORT"),
 		version: env!("CARGO_PKG_VERSION"),
-		executable_name: "node-template",
+		executable_name: "litentry",
 		author: "Anonymous",
-		description: "Template Node",
+		description: "Litentry Node",
 		support_url: "support.anonymous.an",
 		copyright_start_year: 2017,
 	};

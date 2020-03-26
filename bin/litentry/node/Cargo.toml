@@ -1,6 +1,6 @@
 [package]
-name = "node-template"
-version = "2.0.0-alpha.5"
+name = "litentry"
+version = "0.0.1"
 authors = ["Anonymous"]
 edition = "2018"
 license = "Unlicense"
@@ -9,7 +9,7 @@ homepage = "https://substrate.dev"
 repository = "https://github.com/paritytech/substrate/"
 
 [[bin]]
-name = "node-template"
+name = "litentry"
 
 [dependencies]
 futures = "0.3.1"
@@ -34,7 +34,7 @@ sc-client-api = { version = "2.0.0-alpha.5", path = "../../../client/api" }
 sp-runtime = { version = "2.0.0-alpha.5", path = "../../../primitives/runtime" }
 sc-basic-authorship = { path = "../../../client/basic-authorship", version = "0.8.0-alpha.5"}
 
-node-template-runtime = { version = "2.0.0-alpha.5", path = "../runtime" }
+litentry-runtime = { version = "0.0.1", path = "../runtime" }
 
 [build-dependencies]
 vergen = "3.0.4"

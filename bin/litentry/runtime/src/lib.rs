@@ -92,8 +92,8 @@ pub mod opaque {
 
 /// This runtime version.
 pub const VERSION: RuntimeVersion = RuntimeVersion {
-	spec_name: create_runtime_str!("node-template"),
-	impl_name: create_runtime_str!("node-template"),
+	spec_name: create_runtime_str!("litentry"),
+	impl_name: create_runtime_str!("litentry"),
 	authoring_version: 1,
 	spec_version: 1,
 	impl_version: 1,
@@ -241,7 +241,7 @@ construct_runtime!(
 		TransactionPayment: transaction_payment::{Module, Storage},
 		Sudo: sudo::{Module, Call, Config<T>, Storage, Event<T>},
 		// Used for the module template in `./template.rs`
-		TemplateModule: template::{Module, Call, Storage, Event<T>},
+		LintentryTemplateModule: template::{Module, Call, Storage, Event<T>},
 	}
 );
 

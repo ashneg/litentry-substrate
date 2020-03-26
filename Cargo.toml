@@ -1,5 +1,8 @@
 [workspace]
 members = [
+    "bin/litentry/node",
+    "bin/litentry/runtime",
+    "bin/litentry/pallets/template",
 	"bin/node-template/node",
 	"bin/node-template/runtime",
 	"bin/node-template/pallets/template",
