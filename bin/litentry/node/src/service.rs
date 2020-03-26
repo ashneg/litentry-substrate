@@ -15,8 +15,8 @@ use sc_finality_grandpa::{self, FinalityProofProvider as GrandpaFinalityProofPro
 // Our native executor instance.
 native_executor_instance!(
 	pub Executor,
-	lintetry_runtime::api::dispatch,
-	lintetry_runtime::native_version,
+	litentry_runtime::api::dispatch,
+	litentry_runtime::native_version,
 );
 
 /// Starts a `ServiceBuilder` for a full service.
@@ -30,7 +30,7 @@ macro_rules! new_full_start {
 		let inherent_data_providers = sp_inherents::InherentDataProviders::new();
 
 		let builder = sc_service::ServiceBuilder::new_full::<
-			lintetry_runtime::opaque::Block, lintetry_runtime::RuntimeApi, crate::service::Executor
+			litentry_runtime::opaque::Block, litentry_runtime::RuntimeApi, crate::service::Executor
 		>($config)?
 			.with_select_chain(|_config, backend| {
 				Ok(sc_client::LongestChain::new(backend.clone()))
