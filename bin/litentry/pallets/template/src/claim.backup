@@ -4,8 +4,11 @@ use balances;
 use codec::{Codec, Decode, Encode};
 use frame_support::traits::{Get, Randomness};
 use frame_support::{
-    decl_error, decl_event, decl_module, decl_storage, dispatch::DispatchResult, ensure, Parameter,
-    StorageMap, StorageValue,
+    decl_error, decl_event, decl_module, decl_storage,
+    dispatch::DispatchResult,
+    ensure,
+    weights::{ClassifyDispatch, DispatchClass, SimpleDispatchInfo, Weight},
+    Parameter, StorageMap, StorageValue,
 };
 use frame_system::{self as system, ensure_signed};
 use sp_runtime::{
@@ -16,6 +19,7 @@ use sp_runtime::{
     },
     RuntimeDebug,
 };
+// use litentry_weights::Linear;
 
 #[derive(Encode, Decode, Default, Clone, PartialEq, RuntimeDebug)]
 pub struct Identity<Hash> {
@@ -39,7 +43,7 @@ pub trait Trait: balances::Trait + system::Trait {
     // Add other types and constants required to configure this pallet.
     /// The overarching event type.
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
-    type Randomness: Randomness<Self::Hash>;
+    // type Randomness: Randomness<Self::Hash>;
     // type Balance: Member + Parameter + AtLeast32Bit + Default + Copy;
 }
 
@@ -112,6 +116,7 @@ decl_module! {
         fn deposit_event() = default;
 
         // public functions
+        #[weight = SimpleDispatchInfo::FixedNormal(700)]
         pub fn register_identity(origin) -> DispatchResult {
             let sender = ensure_signed(origin)?;
             let random_hash = Self::get_hash(&sender);
@@ -125,6 +130,7 @@ decl_module! {
             // Ok(())
         }
 
+        #[weight = SimpleDispatchInfo::FixedNormal(700)]
         fn register_identity_with_id(origin, identity_id: T::Hash) -> DispatchResult {
             let sender = ensure_signed(origin)?;
 
@@ -138,7 +144,7 @@ decl_module! {
             // Ok(())
         }
 
-
+        #[weight = SimpleDispatchInfo::FixedNormal(1200)]
         fn issue_token(
             origin,
             to: T::AccountId,
@@ -165,6 +171,7 @@ decl_module! {
             Ok(())
         }
 
+        #[weight = SimpleDispatchInfo::FixedNormal(900)]
         fn transfer_token(origin, to: T::AccountId, token_id: T::Hash ) -> DispatchResult {
             let sender = ensure_signed(origin)?;
 

@@ -11,6 +11,11 @@ description = "FRAME pallet template"
 [dependencies]
 codec = { package = "parity-scale-codec", version = "1.2.0", default-features = false, features = ["derive"] }
 safe-mix = { default-features = false, version = '1.0.0' }
+sp-runtime = { version = "2.0.0-alpha.5", default-features = false, path = "../../../../primitives/runtime" }
+sp-io = { version = "2.0.0-alpha.5", default-features = false, path = "../../../../primitives/io" }
+sp-core = { version = "2.0.0-alpha.5", default-features = false, path = "../../../../primitives/core" }
+balances = { version = "2.0.0-alpha.5", default-features = false, package = "pallet-balances", path = "../../../../frame/balances" }
+litentry-utils = {version= "0.1.0", default-features = false, path="../../utils"}
 
 [dependencies.frame-support]
 default-features = false
@@ -21,20 +26,11 @@ path = "../../../../frame/support"
 default-features = false
 version = "2.0.0-alpha.5"
 path = "../../../../frame/system"
-[dev-dependencies.sp-core]
-default-features = false
-version = "2.0.0-alpha.5"
-path = "../../../../primitives/core"
 
 [dev-dependencies.sp-io]
 default-features = false
 version = "2.0.0-alpha.5"
 path = "../../../../primitives/io"
-
-[dev-dependencies.sp-runtime]
-default-features = false
-version = "2.0.0-alpha.5"
-path = "../../../../primitives/runtime"
 
 
 [features]
@@ -43,5 +39,10 @@ std = [
 	'codec/std',
 	'frame-support/std',
 	'safe-mix/std',
-	'frame-system/std'
+	"sp-runtime/std",
+	'frame-system/std',
+		"sp-io/std",
+		'sp-core/std',
+		'balances/std',
+		'litentry-utils/std'
 ]
