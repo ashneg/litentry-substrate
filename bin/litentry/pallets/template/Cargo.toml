@@ -17,6 +17,9 @@ sp-core = { version = "2.0.0-alpha.5", default-features = false, path = "../../.
 balances = { version = "2.0.0-alpha.5", default-features = false, package = "pallet-balances", path = "../../../../frame/balances" }
 litentry-utils = {version= "0.1.0", default-features = false, path="../../utils"}
 
+[dev-dependencies]
+randomness-collective-flip = { version = "2.0.0-alpha.5", default-features = false, package = "pallet-randomness-collective-flip", path = "../../../../frame/randomness-collective-flip" }
+
 [dependencies.frame-support]
 default-features = false
 version = "2.0.0-alpha.5"
@@ -44,5 +47,6 @@ std = [
 		"sp-io/std",
 		'sp-core/std',
 		'balances/std',
-		'litentry-utils/std'
+		'litentry-utils/std',
+		'randomness-collective-flip/std'
 ]

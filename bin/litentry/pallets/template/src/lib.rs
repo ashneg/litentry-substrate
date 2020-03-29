@@ -1,25 +1,31 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use balances;
-use codec::{Codec, Decode, Encode};
-use frame_support::traits::{Get, Randomness};
+use codec::{Decode, Encode};
+use frame_support::traits::Randomness;
 use frame_support::{
     decl_error, decl_event, decl_module, decl_storage,
     dispatch::DispatchResult,
     ensure,
-    weights::{ClassifyDispatch, DispatchClass, SimpleDispatchInfo, Weight},
-    Parameter, StorageMap, StorageValue,
+    weights::{SimpleDispatchInfo},
+    StorageMap, StorageValue,
 };
 use frame_system::{self as system, ensure_signed};
 use sp_runtime::{
-    print,
     traits::{
-        AtLeast32Bit, Bounded, CheckedAdd, CheckedSub, Hash, MaybeSerializeDeserialize, Member,
+        AtLeast32Bit, Bounded, Hash, Member,
         Saturating, StaticLookup, Zero,
     },
     RuntimeDebug,
 };
 // use litentry_weights::Linear;
+
+#[cfg(test)]
+mod mock;
+
+// mod claim;
+#[cfg(test)]
+mod tests;
 
 #[derive(Encode, Decode, Default, Clone, PartialEq, RuntimeDebug)]
 pub struct Identity<Hash> {
@@ -122,7 +128,6 @@ decl_module! {
             let new_identity = Identity {
                 id: random_hash
             };
-
             Self::mint_identity(sender, random_hash, new_identity)
 
             // <Nonce<T>>::mutate(|n| *n += 1);
