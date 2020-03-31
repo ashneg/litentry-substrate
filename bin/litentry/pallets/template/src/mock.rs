@@ -90,4 +90,4 @@ impl_outer_event! {
 	}
 }
 
-pub type LitentryTemplateModule = Module<Test>;
+pub type LitentryPallet = Module<Test>;

@@ -1,0 +1,14 @@
+{
+    "Address": "AccountId",
+    "LookupSource": "AccountId",
+    "IdentityOf": {
+      "id": "Hash"
+    },
+    "AuthorizedTokenOf": {
+      "id": "Hash",
+      "cost": "Balance",
+      "data": "u64",
+      "datatype": "u64",
+      "expired": "u64"
+    }
+  }
