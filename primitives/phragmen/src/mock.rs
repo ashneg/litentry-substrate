@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -18,12 +18,12 @@
 
 #![cfg(test)]
 
-use crate::{elect, PhragmenResult, PhragmenAssignment};
-use sr_primitives::{
-	assert_eq_error_rate, Perbill,
-	traits::{Convert, Member, SaturatedConversion}
+use crate::{elect, PhragmenResult, Assignment};
+use sp_runtime::{
+	assert_eq_error_rate, PerThing,
+	traits::{Convert, Member, SaturatedConversion, Zero, One}
 };
-use rstd::collections::btree_map::BTreeMap;
+use sp_std::collections::btree_map::BTreeMap;
 
 pub(crate) struct TestCurrencyToVote;
 impl Convert<Balance, u64> for TestCurrencyToVote {
@@ -149,7 +149,7 @@ pub(crate) fn elect_float<A, FS>(
 		if let Some(winner) = candidates
 			.iter_mut()
 			.filter(|c| !c.elected)
-			.min_by(|x, y| x.score.partial_cmp(&y.score).unwrap_or(rstd::cmp::Ordering::Equal))
+			.min_by(|x, y| x.score.partial_cmp(&y.score).unwrap_or(sp_std::cmp::Ordering::Equal))
 		{
 			winner.elected = true;
 			for n in &mut voters {
@@ -250,10 +250,10 @@ pub(crate) fn do_equalize_float<A>(
 	if backing_backed_stake.len() > 0 {
 		let max_stake = backing_backed_stake
 			.iter()
-			.max_by(|x, y| x.partial_cmp(&y).unwrap_or(rstd::cmp::Ordering::Equal))
+			.max_by(|x, y| x.partial_cmp(&y).unwrap_or(sp_std::cmp::Ordering::Equal))
 			.expect("vector with positive length will have a max; qed");
 		let min_stake = backed_stakes_iter
-			.min_by(|x, y| x.partial_cmp(&y).unwrap_or(rstd::cmp::Ordering::Equal))
+			.min_by(|x, y| x.partial_cmp(&y).unwrap_or(sp_std::cmp::Ordering::Equal))
 			.expect("iterator with positive length will have a min; qed");
 
 		difference = max_stake - min_stake;
@@ -274,17 +274,10 @@ pub(crate) fn do_equalize_float<A>(
 		e.1 = 0.0;
 	});
 
-	// todo: rewrite.
 	elected_edges.sort_unstable_by(|x, y|
-		if let Some(x) = support_map.get(&x.0) {
-			if let Some(y) = support_map.get(&y.0) {
-				x.total.partial_cmp(&y.total).unwrap_or(rstd::cmp::Ordering::Equal)
-			} else {
-				rstd::cmp::Ordering::Equal
-			}
-		} else {
-			rstd::cmp::Ordering::Equal
-		}
+		support_map.get(&x.0)
+			.and_then(|x| support_map.get(&y.0).and_then(|y| x.total.partial_cmp(&y.total)))
+			.unwrap_or(sp_std::cmp::Ordering::Equal)
 	);
 
 	let mut cumulative_stake = 0.0;
@@ -327,27 +320,27 @@ pub(crate) fn create_stake_of(stakes: &[(AccountId, Balance)])
 }
 
 
-pub fn check_assignments(assignments: Vec<(AccountId, Vec<PhragmenAssignment<AccountId>>)>) {
-	for (_, a) in assignments {
-		let sum: u32 = a.iter().map(|(_, p)| p.deconstruct()).sum();
-		assert_eq_error_rate!(sum, Perbill::accuracy(), 5);
+pub fn check_assignments_sum<T: PerThing>(assignments: Vec<Assignment<AccountId, T>>) {
+	for Assignment { distribution, .. } in assignments {
+		let mut sum: u128 = Zero::zero();
+		distribution.iter().for_each(|(_, p)| sum += p.deconstruct().saturated_into());
+		assert_eq_error_rate!(sum, T::ACCURACY.saturated_into(), 1);
 	}
 }
 
-pub(crate) fn run_and_compare(
+pub(crate) fn run_and_compare<Output: PerThing>(
 	candidates: Vec<AccountId>,
 	voters: Vec<(AccountId, Vec<AccountId>)>,
-	stake_of: Box<dyn Fn(&AccountId) -> Balance>,
+	stake_of: &Box<dyn Fn(&AccountId) -> Balance>,
 	to_elect: usize,
 	min_to_elect: usize,
 ) {
 	// run fixed point code.
-	let PhragmenResult { winners, assignments } = elect::<_, _, _, TestCurrencyToVote>(
+	let PhragmenResult { winners, assignments } = elect::<_, _, TestCurrencyToVote, Output>(
 		to_elect,
 		min_to_elect,
 		candidates.clone(),
-		voters.clone(),
-		&stake_of,
+		voters.iter().map(|(ref v, ref vs)| (v.clone(), stake_of(v), vs.clone())).collect::<Vec<_>>(),
 	).unwrap();
 
 	// run float poc code.
@@ -361,14 +354,14 @@ pub(crate) fn run_and_compare(
 
 	assert_eq!(winners, truth_value.winners);
 
-	for (nominator, assigned) in assignments.clone() {
-		if let Some(float_assignments) = truth_value.assignments.iter().find(|x| x.0 == nominator) {
-			for (candidate, per_thingy) in assigned {
+	for Assignment { who, distribution } in assignments.clone() {
+		if let Some(float_assignments) = truth_value.assignments.iter().find(|x| x.0 == who) {
+			for (candidate, per_thingy) in distribution {
 				if let Some(float_assignment) = float_assignments.1.iter().find(|x| x.0 == candidate ) {
 					assert_eq_error_rate!(
-						Perbill::from_fraction(float_assignment.1).deconstruct(),
+						Output::from_fraction(float_assignment.1).deconstruct(),
 						per_thingy.deconstruct(),
-						1,
+						Output::Inner::one(),
 					);
 				} else {
 					panic!("candidate mismatch. This should never happen.")
@@ -379,10 +372,10 @@ pub(crate) fn run_and_compare(
 		}
 	}
 
-	check_assignments(assignments);
+	check_assignments_sum(assignments);
 }
 
-pub(crate) fn build_support_map<FS>(
+pub(crate) fn build_support_map_float<FS>(
 	result: &mut _PhragmenResult<AccountId>,
 	stake_of: FS,
 ) -> _SupportMap<AccountId>

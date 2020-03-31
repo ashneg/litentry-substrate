@@ -1,0 +1,16 @@
+[package]
+name = "litentry-utils"
+version = "0.1.0"
+authors = ["Anonymous"]
+edition = "2018"
+
+[features]
+default = ['std']
+std = [
+    'frame-support/std',
+]
+
+[dependencies.frame-support]
+default-features = false
+version = "2.0.0-alpha.5"
+path = "../../../frame/support"

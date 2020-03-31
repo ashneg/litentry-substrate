@@ -1,4 +1,4 @@
-// Copyright 2019
+// Copyright 2019-2020
 //     by  Centrality Investments Ltd.
 //     and Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
@@ -20,32 +20,32 @@
 
 #![cfg(test)]
 
-use sr_primitives::{
+use sp_runtime::{
 	Perbill,
 	testing::Header,
 	traits::{BlakeTwo256, IdentityLookup},
 };
-use primitives::H256;
-use support::{parameter_types, impl_outer_event, impl_outer_origin};
+use sp_core::H256;
+use frame_support::{parameter_types, impl_outer_event, impl_outer_origin, weights::Weight};
 
 use super::*;
 
 impl_outer_origin! {
-	pub enum Origin for Test {}
+	pub enum Origin for Test where system = frame_system {}
 }
 
-// For testing the module, we construct most of a mock runtime. This means
+// For testing the pallet, we construct most of a mock runtime. This means
 // first constructing a configuration type (`Test`) which `impl`s each of the
-// configuration traits of modules we want to use.
+// configuration traits of pallets we want to use.
 #[derive(Clone, Eq, PartialEq)]
 pub struct Test;
 parameter_types! {
 	pub const BlockHashCount: u64 = 250;
-	pub const MaximumBlockWeight: u32 = 1024;
+	pub const MaximumBlockWeight: Weight = 1024;
 	pub const MaximumBlockLength: u32 = 2 * 1024;
 	pub const AvailableBlockRatio: Perbill = Perbill::one();
 }
-impl system::Trait for Test {
+impl frame_system::Trait for Test {
 	type Origin = Origin;
 	type Index = u64;
 	type BlockNumber = u64;
@@ -61,6 +61,10 @@ impl system::Trait for Test {
 	type AvailableBlockRatio = AvailableBlockRatio;
 	type BlockHashCount = BlockHashCount;
 	type Version = ();
+	type ModuleToIndex = ();
+	type AccountData = ();
+	type OnNewAccount = ();
+	type OnKilledAccount = ();
 }
 
 impl Trait for Test {
@@ -73,15 +77,17 @@ mod generic_asset {
 	pub use crate::Event;
 }
 
+use frame_system as system;
 impl_outer_event! {
 	pub enum TestEvent for Test {
+		system<T>,
 		generic_asset<T>,
 	}
 }
 
 pub type GenericAsset = Module<Test>;
 
-pub type System = system::Module<Test>;
+pub type System = frame_system::Module<Test>;
 
 pub struct ExtBuilder {
 	asset_id: u32,
@@ -117,8 +123,8 @@ impl ExtBuilder {
 	}
 
 	// builds genesis config
-	pub fn build(self) -> runtime_io::TestExternalities {
-		let mut t = system::GenesisConfig::default().build_storage::<Test>().unwrap();
+	pub fn build(self) -> sp_io::TestExternalities {
+		let mut t = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
 
 		GenesisConfig::<Test> {
 				assets: vec![self.asset_id],
@@ -136,8 +142,8 @@ impl ExtBuilder {
 
 // This function basically just builds a genesis storage key/value store according to
 // our desired mockup.
-pub fn new_test_ext() -> runtime_io::TestExternalities {
-	system::GenesisConfig::default()
+pub fn new_test_ext() -> sp_io::TestExternalities {
+	frame_system::GenesisConfig::default()
 		.build_storage::<Test>()
 		.unwrap()
 		.into()

@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -61,15 +61,16 @@
 //! ### Get current timestamp
 //!
 //! ```
-//! use support::{decl_module, dispatch::Result};
+//! use frame_support::{decl_module, dispatch};
 //! # use pallet_timestamp as timestamp;
-//! use system::ensure_signed;
+//! use frame_system::{self as system, ensure_signed};
 //!
 //! pub trait Trait: timestamp::Trait {}
 //!
 //! decl_module! {
 //! 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
-//! 		pub fn get_time(origin) -> Result {
+//! 		#[weight = frame_support::weights::SimpleDispatchInfo::default()]
+//! 		pub fn get_time(origin) -> dispatch::DispatchResult {
 //! 			let _sender = ensure_signed(origin)?;
 //! 			let _now = <timestamp::Module<T>>::get();
 //! 			Ok(())
@@ -79,7 +80,7 @@
 //! # fn main() {}
 //! ```
 //!
-//! ### Example from the SRML
+//! ### Example from the FRAME
 //!
 //! The [Session module](https://github.com/paritytech/substrate/blob/master/frame/session/src/lib.rs) uses
 //! the Timestamp module for session management.
@@ -90,27 +91,32 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use rstd::{result, cmp};
-use inherents::{ProvideInherent, InherentData, InherentIdentifier};
-use support::{Parameter, decl_storage, decl_module};
-use support::traits::{Time, Get};
-use sr_primitives::{
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+
+use sp_std::{result, cmp};
+use sp_inherents::{ProvideInherent, InherentData, InherentIdentifier};
+use frame_support::{
+	Parameter, decl_storage, decl_module, debug,
+	traits::{Time, UnixTime, Get},
+	weights::SimpleDispatchInfo,
+};
+use sp_runtime::{
 	RuntimeString,
 	traits::{
-		SimpleArithmetic, Zero, SaturatedConversion, Scale
+		AtLeast32Bit, Zero, SaturatedConversion, Scale
 	}
 };
-use support::weights::SimpleDispatchInfo;
-use system::ensure_none;
+use frame_system::ensure_none;
 use sp_timestamp::{
 	InherentError, INHERENT_IDENTIFIER, InherentType,
 	OnTimestampSet,
 };
 
 /// The module configuration trait
-pub trait Trait: system::Trait {
+pub trait Trait: frame_system::Trait {
 	/// Type used for expressing timestamp.
-	type Moment: Parameter + Default + SimpleArithmetic
+	type Moment: Parameter + Default + AtLeast32Bit
 		+ Scale<Self::BlockNumber, Output = Self::Moment> + Copy;
 
 	/// Something which can be notified when the timestamp is set. Set this to `()` if not needed.
@@ -236,28 +242,47 @@ impl<T: Trait> Time for Module<T> {
 	}
 }
 
+/// Before the timestamp inherent is applied, it returns the time of previous block.
+///
+/// On genesis the time returned is not valid.
+impl<T: Trait> UnixTime for Module<T> {
+	fn now() -> core::time::Duration {
+		// now is duration since unix epoch in millisecond as documented in
+		// `sp_timestamp::InherentDataProvider`.
+		let now = Self::now();
+		sp_std::if_std! {
+			if now == T::Moment::zero() {
+				debug::error!(
+					"`pallet_timestamp::UnixTime::now` is called at genesis, invalid value returned: 0"
+				);
+			}
+		}
+		core::time::Duration::from_millis(now.saturated_into::<u64>())
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 
-	use support::{impl_outer_origin, assert_ok, parameter_types};
-	use runtime_io::TestExternalities;
-	use primitives::H256;
-	use sr_primitives::{Perbill, traits::{BlakeTwo256, IdentityLookup}, testing::Header};
+	use frame_support::{impl_outer_origin, assert_ok, parameter_types, weights::Weight};
+	use sp_io::TestExternalities;
+	use sp_core::H256;
+	use sp_runtime::{Perbill, traits::{BlakeTwo256, IdentityLookup}, testing::Header};
 
 	impl_outer_origin! {
-		pub enum Origin for Test {}
+		pub enum Origin for Test  where system = frame_system {}
 	}
 
 	#[derive(Clone, Eq, PartialEq)]
 	pub struct Test;
 	parameter_types! {
 		pub const BlockHashCount: u64 = 250;
-		pub const MaximumBlockWeight: u32 = 1024;
+		pub const MaximumBlockWeight: Weight = 1024;
 		pub const MaximumBlockLength: u32 = 2 * 1024;
 		pub const AvailableBlockRatio: Perbill = Perbill::one();
 	}
-	impl system::Trait for Test {
+	impl frame_system::Trait for Test {
 		type Origin = Origin;
 		type Index = u64;
 		type BlockNumber = u64;
@@ -273,6 +298,10 @@ mod tests {
 		type AvailableBlockRatio = AvailableBlockRatio;
 		type MaximumBlockLength = MaximumBlockLength;
 		type Version = ();
+		type ModuleToIndex = ();
+		type AccountData = ();
+		type OnNewAccount = ();
+		type OnKilledAccount = ();
 	}
 	parameter_types! {
 		pub const MinimumPeriod: u64 = 5;
@@ -286,7 +315,7 @@ mod tests {
 
 	#[test]
 	fn timestamp_works() {
-		let t = system::GenesisConfig::default().build_storage::<Test>().unwrap();
+		let t = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
 		TestExternalities::new(t).execute_with(|| {
 			Timestamp::set_timestamp(42);
 			assert_ok!(Timestamp::dispatch(Call::set(69), Origin::NONE));
@@ -297,7 +326,7 @@ mod tests {
 	#[test]
 	#[should_panic(expected = "Timestamp must be updated only once in the block")]
 	fn double_timestamp_should_fail() {
-		let t = system::GenesisConfig::default().build_storage::<Test>().unwrap();
+		let t = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
 		TestExternalities::new(t).execute_with(|| {
 			Timestamp::set_timestamp(42);
 			assert_ok!(Timestamp::dispatch(Call::set(69), Origin::NONE));
@@ -308,7 +337,7 @@ mod tests {
 	#[test]
 	#[should_panic(expected = "Timestamp must increment by at least <MinimumPeriod> between sequential blocks")]
 	fn block_period_minimum_enforced() {
-		let t = system::GenesisConfig::default().build_storage::<Test>().unwrap();
+		let t = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
 		TestExternalities::new(t).execute_with(|| {
 			Timestamp::set_timestamp(42);
 			let _ = Timestamp::dispatch(Call::set(46), Origin::NONE);

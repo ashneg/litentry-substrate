@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -14,15 +14,15 @@
 // You should have received a copy of the GNU General Public License
 // along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
 
-//! SRML module that tracks the last finalized block, as perceived by block authors.
+//! FRAME Pallet that tracks the last finalized block, as perceived by block authors.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use inherents::{InherentIdentifier, ProvideInherent, InherentData, MakeFatalError};
-use sr_primitives::traits::{One, Zero, SaturatedConversion};
-use rstd::{prelude::*, result, cmp, vec};
-use support::{decl_module, decl_storage};
-use support::traits::Get;
+use sp_inherents::{InherentIdentifier, ProvideInherent, InherentData, MakeFatalError};
+use sp_runtime::traits::{One, Zero, SaturatedConversion};
+use sp_std::{prelude::*, result, cmp, vec};
+use frame_support::{decl_module, decl_storage, decl_error, ensure};
+use frame_support::traits::Get;
 use frame_system::{ensure_none, Trait as SystemTrait};
 use sp_finality_tracker::{INHERENT_IDENTIFIER, FinalizedInherentData};
 
@@ -40,7 +40,7 @@ pub trait Trait: SystemTrait {
 }
 
 decl_storage! {
-	trait Store for Module<T: Trait> as Timestamp {
+	trait Store for Module<T: Trait> as FinalityTracker {
 		/// Recent hints.
 		RecentHints get(fn recent_hints) build(|_| vec![T::BlockNumber::zero()]): Vec<T::BlockNumber>;
 		/// Ordered recent hints.
@@ -56,8 +56,18 @@ decl_storage! {
 	}
 }
 
+decl_error! {
+	pub enum Error for Module<T: Trait> {
+		/// Final hint must be updated only once in the block
+		AlreadyUpdated,
+		/// Finalized height above block number
+		BadHint,
+	}
+}
+
 decl_module! {
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
+		type Error = Error<T>;
 		/// The number of recent samples to keep from this chain. Default is 101.
 		const WindowSize: T::BlockNumber = T::WindowSize::get();
 
@@ -66,12 +76,13 @@ decl_module! {
 
 		/// Hint that the author of this block thinks the best finalized
 		/// block is the given number.
+		#[weight = frame_support::weights::SimpleDispatchInfo::default()]
 		fn final_hint(origin, #[compact] hint: T::BlockNumber) {
 			ensure_none(origin)?;
-			assert!(!<Self as Store>::Update::exists(), "Final hint must be updated only once in the block");
-			assert!(
+			ensure!(!<Self as Store>::Update::exists(), Error::<T>::AlreadyUpdated);
+			ensure!(
 				frame_system::Module::<T>::block_number() >= hint,
-				"Finalized height above block number",
+				Error::<T>::BadHint,
 			);
 			<Self as Store>::Update::put(hint);
 		}
@@ -193,13 +204,15 @@ impl<T: Trait> ProvideInherent for Module<T> {
 mod tests {
 	use super::*;
 
-	use runtime_io::TestExternalities;
-	use primitives::H256;
-	use sr_primitives::{
+	use sp_io::TestExternalities;
+	use sp_core::H256;
+	use sp_runtime::{
 		testing::Header, Perbill,
-		traits::{BlakeTwo256, IdentityLookup, OnFinalize, Header as HeaderT},
+		traits::{BlakeTwo256, IdentityLookup, Header as HeaderT},
 	};
-	use support::{assert_ok, impl_outer_origin, parameter_types};
+	use frame_support::{
+		assert_ok, impl_outer_origin, parameter_types, weights::Weight, traits::OnFinalize
+	};
 	use frame_system as system;
 	use std::cell::RefCell;
 
@@ -213,7 +226,7 @@ mod tests {
 	pub struct Test;
 
 	impl_outer_origin! {
-		pub enum Origin for Test {}
+		pub enum Origin for Test  where system = frame_system {}
 	}
 
 	thread_local! {
@@ -230,7 +243,7 @@ mod tests {
 
 	parameter_types! {
 		pub const BlockHashCount: u64 = 250;
-		pub const MaximumBlockWeight: u32 = 1024;
+		pub const MaximumBlockWeight: Weight = 1024;
 		pub const MaximumBlockLength: u32 = 2 * 1024;
 		pub const AvailableBlockRatio: Perbill = Perbill::one();
 	}
@@ -250,6 +263,10 @@ mod tests {
 		type AvailableBlockRatio = AvailableBlockRatio;
 		type MaximumBlockLength = MaximumBlockLength;
 		type Version = ();
+		type ModuleToIndex = ();
+		type AccountData = ();
+		type OnNewAccount = ();
+		type OnKilledAccount = ();
 	}
 	parameter_types! {
 		pub const WindowSize: u64 = 11;
@@ -280,7 +297,13 @@ mod tests {
 		TestExternalities::new(t).execute_with(|| {
 			let mut parent_hash = System::parent_hash();
 			for i in 2..106 {
-				System::initialize(&i, &parent_hash, &Default::default(), &Default::default());
+				System::initialize(
+					&i,
+					&parent_hash,
+					&Default::default(),
+					&Default::default(),
+					Default::default()
+				);
 				FinalityTracker::on_finalize(i);
 				let hdr = System::finalize();
 				parent_hash = hdr.hash();
@@ -299,7 +322,13 @@ mod tests {
 		TestExternalities::new(t).execute_with(|| {
 			let mut parent_hash = System::parent_hash();
 			for i in 2..106 {
-				System::initialize(&i, &parent_hash, &Default::default(), &Default::default());
+				System::initialize(
+					&i,
+					&parent_hash,
+					&Default::default(),
+					&Default::default(),
+					Default::default(),
+				);
 				assert_ok!(FinalityTracker::dispatch(
 					Call::final_hint(i-1),
 					Origin::NONE,

@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@
 //! for this to work.
 // end::description[]
 #[cfg(feature = "full_crypto")]
-use rstd::vec::Vec;
+use sp_std::vec::Vec;
 #[cfg(feature = "full_crypto")]
 use schnorrkel::{signing_context, ExpansionMode, Keypair, SecretKey, MiniSecretKey, PublicKey,
 	derive::{Derivation, ChainCode, CHAIN_CODE_LENGTH}
@@ -42,13 +42,13 @@ use crate::crypto::Ss58Codec;
 use crate::{crypto::{Public as TraitPublic, UncheckedFrom, CryptoType, Derive}};
 use crate::hash::{H256, H512};
 use codec::{Encode, Decode};
-use rstd::ops::Deref;
+use sp_std::ops::Deref;
 
 #[cfg(feature = "std")]
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(feature = "full_crypto")]
 use schnorrkel::keys::{MINI_SECRET_KEY_LENGTH, SECRET_KEY_LENGTH};
-use runtime_interface::pass_by::PassByInner;
+use sp_runtime_interface::pass_by::PassByInner;
 
 // signing context
 #[cfg(feature = "full_crypto")]
@@ -121,7 +121,7 @@ impl std::str::FromStr for Public {
 	}
 }
 
-impl rstd::convert::TryFrom<&[u8]> for Public {
+impl sp_std::convert::TryFrom<&[u8]> for Public {
 	type Error = ();
 
 	fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
@@ -154,15 +154,15 @@ impl std::fmt::Display for Public {
 	}
 }
 
-impl rstd::fmt::Debug for Public {
+impl sp_std::fmt::Debug for Public {
 	#[cfg(feature = "std")]
-	fn fmt(&self, f: &mut rstd::fmt::Formatter) -> rstd::fmt::Result {
+	fn fmt(&self, f: &mut sp_std::fmt::Formatter) -> sp_std::fmt::Result {
 		let s = self.to_ss58check();
 		write!(f, "{} ({}...)", crate::hexdisplay::HexDisplay::from(&self.0), &s[0..8])
 	}
 
 	#[cfg(not(feature = "std"))]
-	fn fmt(&self, _: &mut rstd::fmt::Formatter) -> rstd::fmt::Result {
+	fn fmt(&self, _: &mut sp_std::fmt::Formatter) -> sp_std::fmt::Result {
 		Ok(())
 	}
 }
@@ -188,7 +188,7 @@ impl<'de> Deserialize<'de> for Public {
 #[derive(Encode, Decode, PassByInner)]
 pub struct Signature(pub [u8; 64]);
 
-impl rstd::convert::TryFrom<&[u8]> for Signature {
+impl sp_std::convert::TryFrom<&[u8]> for Signature {
 	type Error = ();
 
 	fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
@@ -278,22 +278,22 @@ impl From<schnorrkel::Signature> for Signature {
 	}
 }
 
-impl rstd::fmt::Debug for Signature {
+impl sp_std::fmt::Debug for Signature {
 	#[cfg(feature = "std")]
-	fn fmt(&self, f: &mut rstd::fmt::Formatter) -> rstd::fmt::Result {
+	fn fmt(&self, f: &mut sp_std::fmt::Formatter) -> sp_std::fmt::Result {
 		write!(f, "{}", crate::hexdisplay::HexDisplay::from(&self.0))
 	}
 
 	#[cfg(not(feature = "std"))]
-	fn fmt(&self, _: &mut rstd::fmt::Formatter) -> rstd::fmt::Result {
+	fn fmt(&self, _: &mut sp_std::fmt::Formatter) -> sp_std::fmt::Result {
 		Ok(())
 	}
 }
 
 #[cfg(feature = "full_crypto")]
-impl rstd::hash::Hash for Signature {
-	fn hash<H: rstd::hash::Hasher>(&self, state: &mut H) {
-		rstd::hash::Hash::hash(&self.0[..], state);
+impl sp_std::hash::Hash for Signature {
+	fn hash<H: sp_std::hash::Hasher>(&self, state: &mut H) {
+		sp_std::hash::Hash::hash(&self.0[..], state);
 	}
 }
 
@@ -529,25 +529,24 @@ impl TraitPair for Pair {
 		self.0.sign(context.bytes(message)).into()
 	}
 
-	/// Verify a signature on a message. Returns true if the signature is good.
 	fn verify<M: AsRef<[u8]>>(sig: &Self::Signature, message: M, pubkey: &Self::Public) -> bool {
 		Self::verify_weak(&sig.0[..], message, pubkey)
 	}
 
-	/// Verify a signature on a message. Returns true if the signature is good.
 	fn verify_weak<P: AsRef<[u8]>, M: AsRef<[u8]>>(sig: &[u8], message: M, pubkey: P) -> bool {
-		// Match both schnorrkel 0.1.1 and 0.8.0+ signatures, supporting both wallets
-		// that have not been upgraded and those that have. To swap to 0.8.0 only,
-		// create `schnorrkel::Signature` and pass that into `verify_simple`
-		match PublicKey::from_bytes(pubkey.as_ref()) {
-			Ok(pk) => pk.verify_simple_preaudit_deprecated(
-				SIGNING_CTX, message.as_ref(), &sig,
-			).is_ok(),
-			Err(_) => false,
-		}
+		let signature = match schnorrkel::Signature::from_bytes(sig) {
+			Ok(signature) => signature,
+			Err(_) => return false,
+		};
+
+		let pub_key = match PublicKey::from_bytes(pubkey.as_ref()) {
+			Ok(pub_key) => pub_key,
+			Err(_) => return false,
+		};
+
+		pub_key.verify_simple(SIGNING_CTX, message.as_ref(), &signature).is_ok()
 	}
 
-	/// Return a vec filled with raw data.
 	fn to_raw_vec(&self) -> Vec<u8> {
 		self.0.secret.to_bytes().to_vec()
 	}
@@ -565,6 +564,20 @@ impl Pair {
 
 		let kp = mini_key.expand_to_keypair(ExpansionMode::Ed25519);
 		(Pair(kp), mini_key.to_bytes())
+	}
+
+	/// Verify a signature on a message. Returns `true` if the signature is good.
+	/// Supports old 0.1.1 deprecated signatures and should be used only for backward
+	/// compatibility.
+	pub fn verify_deprecated<M: AsRef<[u8]>>(sig: &Signature, message: M, pubkey: &Public) -> bool {
+		// Match both schnorrkel 0.1.1 and 0.8.0+ signatures, supporting both wallets
+		// that have not been upgraded and those that have.
+		match PublicKey::from_bytes(pubkey.as_ref()) {
+			Ok(pk) => pk.verify_simple_preaudit_deprecated(
+				SIGNING_CTX, message.as_ref(), &sig.0[..],
+			).is_ok(),
+			Err(_) => false,
+		}
 	}
 }
 
@@ -609,14 +622,15 @@ mod compatibility_test {
 	}
 
 	#[test]
-	fn verify_known_message_should_work() {
+	fn verify_known_old_message_should_work() {
 		let public = Public::from_raw(hex!("b4bfa1f7a5166695eb75299fd1c4c03ea212871c342f2c5dfea0902b2c246918"));
 		// signature generated by the 1.1 version with the same ^^ public key.
 		let signature = Signature::from_raw(hex!(
 			"5a9755f069939f45d96aaf125cf5ce7ba1db998686f87f2fb3cbdea922078741a73891ba265f70c31436e18a9acd14d189d73c12317ab6c313285cd938453202"
 		));
 		let message = b"Verifying that I am the owner of 5G9hQLdsKQswNPgB499DeA5PkFBbgkLPJWkkS6FAM6xGQ8xD. Hash: 221455a3\n";
-		assert!(Pair::verify(&signature, &message[..], &public));
+		assert!(Pair::verify_deprecated(&signature, &message[..], &public));
+		assert!(!Pair::verify(&signature, &message[..], &public));
 	}
 }
 
@@ -730,6 +744,27 @@ mod test {
 	}
 
 	#[test]
+	fn messed_signature_should_not_work() {
+		let (pair, _) = Pair::generate();
+		let public = pair.public();
+		let message = b"Signed payload";
+		let Signature(mut bytes) = pair.sign(&message[..]);
+		bytes[0] = !bytes[0];
+		bytes[2] = !bytes[2];
+		let signature = Signature(bytes);
+		assert!(!Pair::verify(&signature, &message[..], &public));
+	}
+
+	#[test]
+	fn messed_message_should_not_work() {
+		let (pair, _) = Pair::generate();
+		let public = pair.public();
+		let message = b"Something important";
+		let signature = pair.sign(&message[..]);
+		assert!(!Pair::verify(&signature, &b"Something unimportant", &public));
+	}
+
+	#[test]
 	fn seeded_pair_should_work() {
 		let pair = Pair::from_seed(b"12345678901234567890123456789012");
 		let public = pair.public();
@@ -755,7 +790,7 @@ mod test {
 	}
 
 	#[test]
-	fn verify_from_wasm_works() {
+	fn verify_from_old_wasm_works() {
 		// The values in this test case are compared to the output of `node-test.js` in schnorrkel-js.
 		//
 		// This is to make sure that the wasm library is compatible.
@@ -766,7 +801,8 @@ mod test {
 		let js_signature = Signature::from_raw(hex!(
 			"28a854d54903e056f89581c691c1f7d2ff39f8f896c9e9c22475e60902cc2b3547199e0e91fa32902028f2ca2355e8cdd16cfe19ba5e8b658c94aa80f3b81a00"
 		));
-		assert!(Pair::verify(&js_signature, b"SUBSTRATE", &public));
+		assert!(Pair::verify_deprecated(&js_signature, b"SUBSTRATE", &public));
+		assert!(!Pair::verify(&js_signature, b"SUBSTRATE", &public));
 	}
 
 	#[test]

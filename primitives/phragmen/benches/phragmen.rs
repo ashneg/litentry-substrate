@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies
+// Copyright 2019-2020 Parity Technologies
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 //! Note that execution times will not be accurate in an absolute scale, since
 //! - Everything is executed in the context of `TestExternalities`
 //! - Everything is executed in native environment.
+
 #![cfg(feature = "bench")]
 #![feature(test)]
 
@@ -23,11 +24,11 @@ extern crate test;
 use test::Bencher;
 
 use rand::{self, Rng};
-extern crate substrate_phragmen as phragmen;
+extern crate sp_phragmen as phragmen;
 use phragmen::{Support, SupportMap, PhragmenStakedAssignment};
 
 use std::collections::BTreeMap;
-use sr_primitives::traits::{Convert, SaturatedConversion};
+use sp_runtime::traits::{Convert, SaturatedConversion};
 
 const VALIDATORS: u64 = 1000;
 const NOMINATORS: u64 = 10_000;
@@ -158,8 +159,8 @@ fn do_phragmen(
 macro_rules! phragmen_benches {
 	($($name:ident: $tup:expr,)*) => {
 	$(
-        #[bench]
-        fn $name(b: &mut Bencher) {
+		#[bench]
+		fn $name(b: &mut Bencher) {
 			let (v, n, t, e, eq_iter, eq_tol) = $tup;
 			println!("----------------------");
 			println!(
@@ -168,8 +169,8 @@ macro_rules! phragmen_benches {
 				v, n, e, e * n, t, eq_iter, eq_tol,
 			);
 			do_phragmen(b, v, n, t, e, eq_iter, eq_tol);
-        }
-    )*
+		}
+	)*
 	}
 }
 

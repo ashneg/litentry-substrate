@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -29,7 +29,7 @@ use frame_support_procedural_tools::{
 	generate_crate_access, generate_hidden_includes, syn_ext as ext
 };
 
-/// All informations contained in input of decl_storage
+/// All information contained in input of decl_storage
 pub struct DeclStorageDef {
 	/// Name of the module used to import hidden imports.
 	hidden_crate: Option<syn::Ident>,
@@ -219,9 +219,9 @@ pub struct StorageLineDefExt {
 	storage_trait: proc_macro2::TokenStream,
 	/// Full trait, for example: `storage::generator::StorageMap<u32, u32>`.
 	storage_generator_trait: proc_macro2::TokenStream,
-	/// Weither the storage is generic.
+	/// Whether the storage is generic.
 	is_generic: bool,
-	/// Weither the storage value is an option.
+	/// Whether the storage value is an option.
 	is_option: bool,
 }
 
@@ -235,10 +235,6 @@ impl StorageLineDefExt {
 				ext::type_contains_ident(&map.key, &def.module_runtime_generic)
 					|| ext::type_contains_ident(&map.value, &def.module_runtime_generic)
 			}
-			StorageLineTypeDef::LinkedMap(map) => {
-				ext::type_contains_ident(&map.key, &def.module_runtime_generic)
-					|| ext::type_contains_ident(&map.value, &def.module_runtime_generic)
-			}
 			StorageLineTypeDef::DoubleMap(map) => {
 				ext::type_contains_ident(&map.key1, &def.module_runtime_generic)
 					|| ext::type_contains_ident(&map.key2, &def.module_runtime_generic)
@@ -249,7 +245,6 @@ impl StorageLineDefExt {
 		let query_type = match &storage_def.storage_type {
 			StorageLineTypeDef::Simple(value) => value.clone(),
 			StorageLineTypeDef::Map(map) => map.value.clone(),
-			StorageLineTypeDef::LinkedMap(map) => map.value.clone(),
 			StorageLineTypeDef::DoubleMap(map) => map.value.clone(),
 		};
 		let is_option = ext::extract_type_option(&query_type).is_some();
@@ -283,17 +278,13 @@ impl StorageLineDefExt {
 			None
 		};
 
-		let storage_trait_trunkated = match &storage_def.storage_type {
+		let storage_trait_truncated = match &storage_def.storage_type {
 			StorageLineTypeDef::Simple(_) => {
 				quote!( StorageValue<#value_type> )
 			},
 			StorageLineTypeDef::Map(map) => {
 				let key = &map.key;
 				quote!( StorageMap<#key, #value_type> )
-			},
-			StorageLineTypeDef::LinkedMap(map) => {
-				let key = &map.key;
-				quote!( StorageLinkedMap<#key, #value_type> )
 			},
 			StorageLineTypeDef::DoubleMap(map) => {
 				let key1 = &map.key1;
@@ -302,8 +293,8 @@ impl StorageLineDefExt {
 			},
 		};
 
-		let storage_trait = quote!( storage::#storage_trait_trunkated );
-		let storage_generator_trait = quote!( storage::generator::#storage_trait_trunkated );
+		let storage_trait = quote!( storage::#storage_trait_truncated );
+		let storage_generator_trait = quote!( storage::generator::#storage_trait_truncated );
 
 		let doc_attrs = storage_def.attrs.iter()
 			.filter_map(|a| a.parse_meta().ok())
@@ -336,7 +327,6 @@ impl StorageLineDefExt {
 
 pub enum StorageLineTypeDef {
 	Map(MapDef),
-	LinkedMap(MapDef),
 	DoubleMap(DoubleMapDef),
 	Simple(syn::Type),
 }
@@ -368,9 +358,11 @@ pub struct ExtraGenesisLineDef {
 pub enum HasherKind {
 	Blake2_256,
 	Blake2_128,
+	Blake2_128Concat,
 	Twox256,
 	Twox128,
 	Twox64Concat,
+	Identity,
 }
 
 impl HasherKind {
@@ -378,9 +370,11 @@ impl HasherKind {
 		match self {
 			HasherKind::Blake2_256 => quote!( Blake2_256 ),
 			HasherKind::Blake2_128 => quote!( Blake2_128 ),
+			HasherKind::Blake2_128Concat => quote!( Blake2_128Concat ),
 			HasherKind::Twox256 => quote!( Twox256 ),
 			HasherKind::Twox128 => quote!( Twox128 ),
 			HasherKind::Twox64Concat => quote!( Twox64Concat ),
+			HasherKind::Identity => quote!( Identity ),
 		}
 	}
 
@@ -388,9 +382,11 @@ impl HasherKind {
 		match self {
 			HasherKind::Blake2_256 => quote!( StorageHasher::Blake2_256 ),
 			HasherKind::Blake2_128 => quote!( StorageHasher::Blake2_128 ),
+			HasherKind::Blake2_128Concat => quote!( StorageHasher::Blake2_128Concat ),
 			HasherKind::Twox256 => quote!( StorageHasher::Twox256 ),
 			HasherKind::Twox128 => quote!( StorageHasher::Twox128 ),
 			HasherKind::Twox64Concat => quote!( StorageHasher::Twox64Concat ),
+			HasherKind::Identity => quote!( StorageHasher::Identity ),
 		}
 	}
 }
@@ -417,8 +413,8 @@ pub fn decl_storage_impl(input: proc_macro::TokenStream) -> proc_macro::TokenStr
 		use #scrate::{
 			StorageValue as _,
 			StorageMap as _,
-			StorageLinkedMap as _,
-			StorageDoubleMap as _
+			StorageDoubleMap as _,
+			StoragePrefixedMap as _,
 		};
 
 		#scrate_decl

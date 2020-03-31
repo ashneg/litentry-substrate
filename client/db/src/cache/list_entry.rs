@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -16,8 +16,8 @@
 
 //! List-cache storage entries.
 
-use client_api::error::Result as ClientResult;
-use sr_primitives::traits::{Block as BlockT, NumberFor};
+use sp_blockchain::Result as ClientResult;
+use sp_runtime::traits::{Block as BlockT, NumberFor};
 use codec::{Encode, Decode};
 
 use crate::cache::{CacheItemT, ComplexBlockId};
@@ -69,7 +69,7 @@ impl<Block: BlockT, T: CacheItemT> Entry<Block, T> {
 			.map(|(entry, next)| (entry.valid_from, next)))
 	}
 
-	/// Searches the list, ending with THIS entry for the best entry preceeding (or at)
+	/// Searches the list, ending with THIS entry for the best entry preceding (or at)
 	/// given block number.
 	/// If the entry is found, result is the entry and the block id of next entry (if exists).
 	/// NOTE that this function does not check that the passed block is actually linked to

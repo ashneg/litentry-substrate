@@ -1,4 +1,4 @@
-// Copyright 2018-2019 Parity Technologies (UK) Ltd.
+// Copyright 2018-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -15,12 +15,13 @@
 // along with Substrate. If not, see <http://www.gnu.org/licenses/>.
 
 use crate::{GasSpent, Module, Trait, BalanceOf, NegativeImbalanceOf};
-use rstd::convert::TryFrom;
-use sr_primitives::traits::{
-	CheckedMul, Zero, SaturatedConversion, SimpleArithmetic, UniqueSaturatedInto,
+use sp_std::convert::TryFrom;
+use sp_runtime::traits::{
+	CheckedMul, Zero, SaturatedConversion, AtLeast32Bit, UniqueSaturatedInto,
 };
-use support::{
+use frame_support::{
 	traits::{Currency, ExistenceRequirement, Imbalance, OnUnbalanced, WithdrawReason}, StorageValue,
+	dispatch::DispatchError,
 };
 
 #[cfg(test)]
@@ -201,7 +202,7 @@ impl<T: Trait> GasMeter<T> {
 pub fn buy_gas<T: Trait>(
 	transactor: &T::AccountId,
 	gas_limit: Gas,
-) -> Result<(GasMeter<T>, NegativeImbalanceOf<T>), &'static str> {
+) -> Result<(GasMeter<T>, NegativeImbalanceOf<T>), DispatchError> {
 	// Buy the specified amount of gas.
 	let gas_price = <Module<T>>::gas_price();
 	let cost = if gas_price.is_zero() {
@@ -247,9 +248,13 @@ pub fn refund_unused_gas<T: Trait>(
 /// A little handy utility for converting a value in balance units into approximate value in gas units
 /// at the given gas price.
 pub fn approx_gas_for_balance<Balance>(gas_price: Balance, balance: Balance) -> Gas
-	where Balance: SimpleArithmetic
+	where Balance: AtLeast32Bit
 {
-	(balance / gas_price).saturated_into::<Gas>()
+	if gas_price.is_zero() {
+		Zero::zero()
+	} else {
+		(balance / gas_price).saturated_into::<Gas>()
+	}
 }
 
 /// A simple utility macro that helps to match against a
@@ -293,7 +298,7 @@ macro_rules! match_tokens {
 #[cfg(test)]
 mod tests {
 	use super::{GasMeter, Token};
-	use crate::tests::Test;
+	use crate::{tests::Test, gas::approx_gas_for_balance};
 
 	/// A trivial token that charges the specified number of gas units.
 	#[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -380,5 +385,23 @@ mod tests {
 	fn charge_exact_amount() {
 		let mut gas_meter = GasMeter::<Test>::with_limit(25, 10);
 		assert!(!gas_meter.charge(&(), SimpleToken(25)).is_out_of_gas());
+	}
+
+	// A unit test for `fn approx_gas_for_balance()`, and makes
+	// sure setting gas_price 0 does not cause `div by zero` error.
+	#[test]
+	fn approx_gas_for_balance_works() {
+		let tests = vec![
+			(approx_gas_for_balance(0_u64, 123), 0),
+			(approx_gas_for_balance(0_u64, 456), 0),
+			(approx_gas_for_balance(1_u64, 123), 123),
+			(approx_gas_for_balance(1_u64, 456), 456),
+			(approx_gas_for_balance(100_u64, 900), 9),
+			(approx_gas_for_balance(123_u64, 900), 7),
+		];
+
+		for (lhs, rhs) in tests {
+			assert_eq!(lhs, rhs);
+		}
 	}
 }

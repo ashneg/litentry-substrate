@@ -1,4 +1,4 @@
-// Copyright 2018-2019 Parity Technologies (UK) Ltd.
+// Copyright 2018-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -16,52 +16,48 @@
 
 use std::collections::BTreeMap;
 use std::iter::FromIterator;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use log::{debug, warn, info};
-use codec::{Decode, Encode};
+use parity_scale_codec::{Decode, Encode};
 use futures::prelude::*;
-use tokio_timer::Delay;
+use futures_timer::Delay;
 use parking_lot::RwLock;
+use sp_blockchain::{HeaderBackend, Error as ClientError, HeaderMetadata};
+use std::marker::PhantomData;
 
-use client_api::{
-	HeaderBackend, BlockchainEvents,
-	backend::{Backend},
-	Finalizer,
-	call_executor::CallExecutor,
-	error::Error as ClientError,
-	utils::is_descendent_of,
-};
-use client::{
-	apply_aux, Client,
-};
-use grandpa::{
+use sc_client_api::{backend::Backend, utils::is_descendent_of};
+use sc_client::apply_aux;
+use finality_grandpa::{
 	BlockNumberOps, Equivocation, Error as GrandpaError, round::State as RoundState,
 	voter, voter_set::VoterSet,
 };
-use primitives::{Blake2Hasher, H256, Pair};
-use sr_primitives::generic::BlockId;
-use sr_primitives::traits::{
+use sp_core::Pair;
+use sp_runtime::generic::BlockId;
+use sp_runtime::traits::{
 	Block as BlockT, Header as HeaderT, NumberFor, One, Zero,
 };
-use substrate_telemetry::{telemetry, CONSENSUS_INFO};
+use sc_telemetry::{telemetry, CONSENSUS_INFO};
 
 use crate::{
-	CommandOrError, Commit, Config, Error, Network, Precommit, Prevote,
+	CommandOrError, Commit, Config, Error, Precommit, Prevote,
 	PrimaryPropose, SignedMessage, NewAuthoritySet, VoterCommand,
 };
 
-use consensus_common::SelectChain;
+use sp_consensus::SelectChain;
 
 use crate::authorities::{AuthoritySet, SharedAuthoritySet};
+use crate::communication::Network as NetworkT;
 use crate::consensus_changes::SharedConsensusChanges;
 use crate::justification::GrandpaJustification;
 use crate::until_imported::UntilVoteTargetImported;
 use crate::voting_rule::VotingRule;
-use fg_primitives::{AuthorityId, AuthoritySignature, SetId, RoundNumber};
+use sp_finality_grandpa::{AuthorityId, AuthoritySignature, SetId, RoundNumber};
+use prometheus_endpoint::{Gauge, U64, register, PrometheusError};
 
-type HistoricalVotes<Block> = grandpa::HistoricalVotes<
+type HistoricalVotes<Block> = finality_grandpa::HistoricalVotes<
 	<Block as BlockT>::Hash,
 	NumberFor<Block>,
 	AuthoritySignature,
@@ -104,10 +100,10 @@ impl<Block: BlockT> Encode for CompletedRounds<Block> {
 	}
 }
 
-impl<Block: BlockT> codec::EncodeLike for CompletedRounds<Block> {}
+impl<Block: BlockT> parity_scale_codec::EncodeLike for CompletedRounds<Block> {}
 
 impl<Block: BlockT> Decode for CompletedRounds<Block> {
-	fn decode<I: codec::Input>(value: &mut I) -> Result<Self, codec::Error> {
+	fn decode<I: parity_scale_codec::Input>(value: &mut I) -> Result<Self, parity_scale_codec::Error> {
 		<(Vec<CompletedRound<Block>>, SetId, Vec<AuthorityId>)>::decode(value)
 			.map(|(rounds, set_id, voters)| CompletedRounds {
 				rounds: rounds.into(),
@@ -374,9 +370,27 @@ impl<Block: BlockT> SharedVoterSetState<Block> {
 	}
 }
 
+/// Prometheus metrics for GRANDPA.
+#[derive(Clone)]
+pub(crate) struct Metrics {
+	finality_grandpa_round: Gauge<U64>,
+}
+
+impl Metrics {
+	pub(crate) fn register(registry: &prometheus_endpoint::Registry) -> Result<Self, PrometheusError> {
+		Ok(Self {
+			finality_grandpa_round: register(
+				Gauge::new("finality_grandpa_round", "Highest completed GRANDPA round.")?,
+				registry
+			)?,
+		})
+	}
+}
+
+
 /// The environment we run GRANDPA in.
-pub(crate) struct Environment<B, E, Block: BlockT, N: Network<Block>, RA, SC, VR> {
-	pub(crate) client: Arc<Client<B, E, Block, RA>>,
+pub(crate) struct Environment<Backend, Block: BlockT, C, N: NetworkT<Block>, SC, VR> {
+	pub(crate) client: Arc<C>,
 	pub(crate) select_chain: SC,
 	pub(crate) voters: Arc<VoterSet<AuthorityId>>,
 	pub(crate) config: Config,
@@ -386,9 +400,11 @@ pub(crate) struct Environment<B, E, Block: BlockT, N: Network<Block>, RA, SC, VR
 	pub(crate) set_id: SetId,
 	pub(crate) voter_set_state: SharedVoterSetState<Block>,
 	pub(crate) voting_rule: VR,
+	pub(crate) metrics: Option<Metrics>,
+	pub(crate) _phantom: PhantomData<Backend>,
 }
 
-impl<B, E, Block: BlockT, N: Network<Block>, RA, SC, VR> Environment<B, E, Block, N, RA, SC, VR> {
+impl<Backend, Block: BlockT, C, N: NetworkT<Block>, SC, VR> Environment<Backend, Block, C, N, SC, VR> {
 	/// Updates the voter set state using the given closure. The write lock is
 	/// held during evaluation of the closure and the environment's voter set
 	/// state is set to its result if successful.
@@ -398,24 +414,33 @@ impl<B, E, Block: BlockT, N: Network<Block>, RA, SC, VR> Environment<B, E, Block
 		self.voter_set_state.with(|voter_set_state| {
 			if let Some(set_state) = f(&voter_set_state)? {
 				*voter_set_state = set_state;
+
+				if let Some(metrics) = self.metrics.as_ref() {
+					if let VoterSetState::Live { completed_rounds, .. } = voter_set_state {
+						let highest = completed_rounds.rounds.iter()
+							.map(|round| round.number)
+							.max()
+							.expect("There is always one completed round (genesis); qed");
+
+						metrics.finality_grandpa_round.set(highest);
+					}
+				}
 			}
 			Ok(())
 		})
 	}
 }
 
-impl<Block: BlockT<Hash=H256>, B, E, N, RA, SC, VR>
-	grandpa::Chain<Block::Hash, NumberFor<Block>>
-for Environment<B, E, Block, N, RA, SC, VR>
+impl<BE, Block: BlockT, C, N, SC, VR>
+	finality_grandpa::Chain<Block::Hash, NumberFor<Block>>
+for Environment<BE, Block, C, N, SC, VR>
 where
 	Block: 'static,
-	B: Backend<Block, Blake2Hasher> + 'static,
-	E: CallExecutor<Block, Blake2Hasher> + Send + Sync + 'static,
-	N: Network<Block> + 'static,
-	N::In: 'static,
+	BE: Backend<Block>,
+	C: crate::ClientForGrandpa<Block, BE>,
+ 	N: NetworkT<Block> + 'static + Send,
 	SC: SelectChain<Block> + 'static,
-	VR: VotingRule<Block, Client<B, E, Block, RA>>,
-	RA: Send + Sync,
+	VR: VotingRule<Block, C>,
 	NumberFor<Block>: BlockNumberOps,
 {
 	fn ancestry(&self, base: Block::Hash, block: Block::Hash) -> Result<Vec<Block::Hash>, GrandpaError> {
@@ -431,32 +456,26 @@ where
 			return None;
 		}
 
+		let base_header = match self.client.header(BlockId::Hash(block)).ok()? {
+			Some(h) => h,
+			None => {
+				debug!(target: "afg", "Encountered error finding best chain containing {:?}: couldn't find base block", block);
+				return None;
+			}
+		};
+
 		// we refuse to vote beyond the current limit number where transitions are scheduled to
 		// occur.
 		// once blocks are finalized that make that transition irrelevant or activate it,
 		// we will proceed onwards. most of the time there will be no pending transition.
-		let limit = self.authority_set.current_limit();
+		// the limit, if any, is guaranteed to be higher than or equal to the given base number.
+		let limit = self.authority_set.current_limit(*base_header.number());
 		debug!(target: "afg", "Finding best chain containing block {:?} with number limit {:?}", block, limit);
 
 		match self.select_chain.finality_target(block, None) {
 			Ok(Some(best_hash)) => {
-				let base_header = self.client.header(&BlockId::Hash(block)).ok()?
-					.expect("Header known to exist after `best_containing` call; qed");
-
-				if let Some(limit) = limit {
-					// this is a rare case which might cause issues,
-					// might be better to return the header itself.
-					if *base_header.number() > limit {
-						debug!(target: "afg", "Encountered error finding best chain containing {:?} with limit {:?}: target block is after limit",
-							block,
-							limit,
-						);
-						return None;
-					}
-				}
-
-				let best_header = self.client.header(&BlockId::Hash(best_hash)).ok()?
-					.expect("Header known to exist after `best_containing` call; qed");
+				let best_header = self.client.header(BlockId::Hash(best_hash)).ok()?
+					.expect("Header known to exist after `finality_target` call; qed");
 
 				// check if our vote is currently being limited due to a pending change
 				let limit = limit.filter(|limit| limit < best_header.number());
@@ -479,8 +498,8 @@ where
 							break;
 						}
 
-						target_header = self.client.header(&BlockId::Hash(*target_header.parent_hash())).ok()?
-							.expect("Header known to exist after `best_containing` call; qed");
+						target_header = self.client.header(BlockId::Hash(*target_header.parent_hash())).ok()?
+							.expect("Header known to exist after `finality_target` call; qed");
 					}
 
 					target = target_header;
@@ -524,17 +543,16 @@ where
 }
 
 
-pub(crate) fn ancestry<B, Block: BlockT<Hash=H256>, E, RA>(
-	client: &Client<B, E, Block, RA>,
+pub(crate) fn ancestry<Block: BlockT, Client>(
+	client: &Arc<Client>,
 	base: Block::Hash,
 	block: Block::Hash,
 ) -> Result<Vec<Block::Hash>, GrandpaError> where
-	B: Backend<Block, Blake2Hasher>,
-	E: CallExecutor<Block, Blake2Hasher>,
+	Client: HeaderMetadata<Block, Error = sp_blockchain::Error>,
 {
 	if base == block { return Err(GrandpaError::NotDescendent) }
 
-	let tree_route_res = header_metadata::tree_route(client, block, base);
+	let tree_route_res = sp_blockchain::tree_route(&**client, block, base);
 
 	let tree_route = match tree_route_res {
 		Ok(tree_route) => tree_route,
@@ -555,33 +573,30 @@ pub(crate) fn ancestry<B, Block: BlockT<Hash=H256>, E, RA>(
 	Ok(tree_route.retracted().iter().skip(1).map(|e| e.hash).collect())
 }
 
-impl<B, E, Block: BlockT<Hash=H256>, N, RA, SC, VR>
+impl<B, Block: BlockT, C, N, SC, VR>
 	voter::Environment<Block::Hash, NumberFor<Block>>
-for Environment<B, E, Block, N, RA, SC, VR>
+for Environment<B, Block, C, N, SC, VR>
 where
 	Block: 'static,
-	B: Backend<Block, Blake2Hasher> + 'static,
-	E: CallExecutor<Block, Blake2Hasher> + 'static + Send + Sync,
-	N: Network<Block> + 'static + Send,
-	N::In: 'static + Send,
-	RA: 'static + Send + Sync,
+	B: Backend<Block>,
+	C: crate::ClientForGrandpa<Block, B> + 'static,
+ 	N: NetworkT<Block> + 'static + Send,
 	SC: SelectChain<Block> + 'static,
-	VR: VotingRule<Block, Client<B, E, Block, RA>>,
+	VR: VotingRule<Block, C>,
 	NumberFor<Block>: BlockNumberOps,
 {
-	type Timer = Box<dyn Future<Item = (), Error = Self::Error> + Send>;
+	type Timer = Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send>>;
 	type Id = AuthorityId;
 	type Signature = AuthoritySignature;
 
 	// regular round message streams
-	type In = Box<dyn Stream<
-		Item = ::grandpa::SignedMessage<Block::Hash, NumberFor<Block>, Self::Signature, Self::Id>,
+	type In = Pin<Box<dyn Stream<
+		Item = Result<::finality_grandpa::SignedMessage<Block::Hash, NumberFor<Block>, Self::Signature, Self::Id>, Self::Error>
+	> + Send>>;
+	type Out = Pin<Box<dyn Sink<
+		::finality_grandpa::Message<Block::Hash, NumberFor<Block>>,
 		Error = Self::Error,
-	> + Send>;
-	type Out = Box<dyn Sink<
-		SinkItem = ::grandpa::Message<Block::Hash, NumberFor<Block>>,
-		SinkError = Self::Error,
-	> + Send>;
+	> + Send>>;
 
 	type Error = CommandOrError<Block::Hash, NumberFor<Block>>;
 
@@ -589,9 +604,8 @@ where
 		&self,
 		round: RoundNumber,
 	) -> voter::RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
-		let now = Instant::now();
-		let prevote_timer = Delay::new(now + self.config.gossip_duration * 2);
-		let precommit_timer = Delay::new(now + self.config.gossip_duration * 4);
+		let prevote_timer = Delay::new(self.config.gossip_duration * 2);
+		let precommit_timer = Delay::new(self.config.gossip_duration * 4);
 
 		let local_key = crate::is_voter(&self.voters, &self.config.keystore);
 
@@ -616,7 +630,7 @@ where
 
 		// schedule incoming messages from the network to be held until
 		// corresponding blocks are imported.
-		let incoming = Box::new(UntilVoteTargetImported::new(
+		let incoming = Box::pin(UntilVoteTargetImported::new(
 			self.client.import_notification_stream(),
 			self.network.clone(),
 			self.client.clone(),
@@ -625,12 +639,12 @@ where
 		).map_err(Into::into));
 
 		// schedule network message cleanup when sink drops.
-		let outgoing = Box::new(outgoing.sink_map_err(Into::into));
+		let outgoing = Box::pin(outgoing.sink_err_into());
 
 		voter::RoundData {
 			voter_id: local_key.map(|pair| pair.public()),
-			prevote_timer: Box::new(prevote_timer.map_err(|e| Error::Timer(e).into())),
-			precommit_timer: Box::new(precommit_timer.map_err(|e| Error::Timer(e).into())),
+			prevote_timer: Box::pin(prevote_timer.map(Ok)),
+			precommit_timer: Box::pin(precommit_timer.map(Ok)),
 			incoming,
 			outgoing,
 		}
@@ -865,6 +879,7 @@ where
 					historical_votes.seen().iter().skip(n_existing_votes).cloned()
 				);
 				already_completed.state = state;
+				crate::aux_schema::write_concluded_round(&*self.client, &already_completed)?;
 			}
 
 			let set_state = VoterSetState::<Block>::Live {
@@ -888,7 +903,7 @@ where
 		commit: Commit<Block>,
 	) -> Result<(), Self::Error> {
 		finalize_block(
-			&*self.client,
+			self.client.clone(),
 			&self.authority_set,
 			&self.consensus_changes,
 			Some(self.config.justification_period.into()),
@@ -903,15 +918,13 @@ where
 
 		//random between 0-1 seconds.
 		let delay: u64 = thread_rng().gen_range(0, 1000);
-		Box::new(Delay::new(
-			Instant::now() + Duration::from_millis(delay)
-		).map_err(|e| Error::Timer(e).into()))
+		Box::pin(Delay::new(Duration::from_millis(delay)).map(Ok))
 	}
 
 	fn prevote_equivocation(
 		&self,
 		_round: RoundNumber,
-		equivocation: ::grandpa::Equivocation<Self::Id, Prevote<Block>, Self::Signature>
+		equivocation: ::finality_grandpa::Equivocation<Self::Id, Prevote<Block>, Self::Signature>
 	) {
 		warn!(target: "afg", "Detected prevote equivocation in the finality worker: {:?}", equivocation);
 		// nothing yet; this could craft misbehavior reports of some kind.
@@ -948,8 +961,8 @@ impl<Block: BlockT> From<GrandpaJustification<Block>> for JustificationOrCommit<
 /// authority set change is enacted then a justification is created (if not
 /// given) and stored with the block when finalizing it.
 /// This method assumes that the block being finalized has already been imported.
-pub(crate) fn finalize_block<B, Block: BlockT<Hash=H256>, E, RA>(
-	client: &Client<B, E, Block, RA>,
+pub(crate) fn finalize_block<BE, Block, Client>(
+	client: Arc<Client>,
 	authority_set: &SharedAuthoritySet<Block::Hash, NumberFor<Block>>,
 	consensus_changes: &SharedConsensusChanges<Block::Hash, NumberFor<Block>>,
 	justification_period: Option<NumberFor<Block>>,
@@ -957,16 +970,16 @@ pub(crate) fn finalize_block<B, Block: BlockT<Hash=H256>, E, RA>(
 	number: NumberFor<Block>,
 	justification_or_commit: JustificationOrCommit<Block>,
 ) -> Result<(), CommandOrError<Block::Hash, NumberFor<Block>>> where
-	B: Backend<Block, Blake2Hasher>,
-	E: CallExecutor<Block, Blake2Hasher> + Send + Sync,
-	RA: Send + Sync,
+	Block:  BlockT,
+	BE: Backend<Block>,
+	Client: crate::ClientForGrandpa<Block, BE>,
 {
 	// NOTE: lock must be held through writing to DB to avoid race. this lock
 	//       also implicitly synchronizes the check for last finalized number
 	//       below.
 	let mut authority_set = authority_set.inner().write();
 
-	let status = client.info().chain;
+	let status = client.info();
 	if number <= status.finalized_number && client.hash(number)? == Some(hash) {
 		// This can happen after a forced change (triggered by the finality tracker when finality is stalled), since
 		// the voter will be restarted at the median last finalized block, which can be lower than the local best
@@ -989,14 +1002,14 @@ pub(crate) fn finalize_block<B, Block: BlockT<Hash=H256>, E, RA>(
 	let mut consensus_changes = consensus_changes.lock();
 	let canon_at_height = |canon_number| {
 		// "true" because the block is finalized
-		canonical_at_height(client, (hash, number), true, canon_number)
+		canonical_at_height(&*client, (hash, number), true, canon_number)
 	};
 
 	let update_res: Result<_, Error> = client.lock_import_and_run(|import_op| {
 		let status = authority_set.apply_standard_changes(
 			hash,
 			number,
-			&is_descendent_of::<_, _, Block::Hash>(client, None),
+			&is_descendent_of::<Block, _>(&*client, None),
 		).map_err(|e| Error::Safety(e.to_string()))?;
 
 		// check if this is this is the first finalization of some consensus changes
@@ -1012,8 +1025,8 @@ pub(crate) fn finalize_block<B, Block: BlockT<Hash=H256>, E, RA>(
 			);
 
 			if let Err(e) = write_result {
-				warn!(target: "finality", "Failed to write updated consensus changes to disk. Bailing.");
-				warn!(target: "finality", "Node is in a potentially inconsistent state.");
+				warn!(target: "afg", "Failed to write updated consensus changes to disk. Bailing.");
+				warn!(target: "afg", "Node is in a potentially inconsistent state.");
 
 				return Err(e.into());
 			}
@@ -1039,7 +1052,7 @@ pub(crate) fn finalize_block<B, Block: BlockT<Hash=H256>, E, RA>(
 				// finalization to remote nodes
 				if !justification_required {
 					if let Some(justification_period) = justification_period {
-						let last_finalized_number = client.info().chain.finalized_number;
+						let last_finalized_number = client.info().finalized_number;
 						justification_required =
 							(!last_finalized_number.is_zero() || number - last_finalized_number == justification_period) &&
 							(last_finalized_number / justification_period != number / justification_period);
@@ -1048,7 +1061,7 @@ pub(crate) fn finalize_block<B, Block: BlockT<Hash=H256>, E, RA>(
 
 				if justification_required {
 					let justification = GrandpaJustification::from_commit(
-						client,
+						&client,
 						round_number,
 						commit,
 					)?;
@@ -1065,7 +1078,7 @@ pub(crate) fn finalize_block<B, Block: BlockT<Hash=H256>, E, RA>(
 		// ideally some handle to a synchronization oracle would be used
 		// to avoid unconditionally notifying.
 		client.apply_finality(import_op, BlockId::Hash(hash), justification, true).map_err(|e| {
-			warn!(target: "finality", "Error applying finality to block {:?}: {:?}", (hash, number), e);
+			warn!(target: "afg", "Error applying finality to block {:?}: {:?}", (hash, number), e);
 			e
 		})?;
 		telemetry!(CONSENSUS_INFO; "afg.finalized_blocks_up_to";
@@ -1077,9 +1090,9 @@ pub(crate) fn finalize_block<B, Block: BlockT<Hash=H256>, E, RA>(
 			let (new_id, set_ref) = authority_set.current();
 
 			if set_ref.len() > 16 {
-				info!("Applying GRANDPA set change to new set with {} authorities", set_ref.len());
+				info!("👴 Applying GRANDPA set change to new set with {} authorities", set_ref.len());
 			} else {
-				info!("Applying GRANDPA set change to new set {:?}", set_ref);
+				info!("👴 Applying GRANDPA set change to new set {:?}", set_ref);
 			}
 
 			telemetry!(CONSENSUS_INFO; "afg.generating_new_authority_set";
@@ -1105,8 +1118,8 @@ pub(crate) fn finalize_block<B, Block: BlockT<Hash=H256>, E, RA>(
 			);
 
 			if let Err(e) = write_result {
-				warn!(target: "finality", "Failed to write updated authority set to disk. Bailing.");
-				warn!(target: "finality", "Node is in a potentially inconsistent state.");
+				warn!(target: "afg", "Failed to write updated authority set to disk. Bailing.");
+				warn!(target: "afg", "Node is in a potentially inconsistent state.");
 
 				return Err(e.into());
 			}
@@ -1132,8 +1145,8 @@ pub(crate) fn finalize_block<B, Block: BlockT<Hash=H256>, E, RA>(
 
 /// Using the given base get the block at the given height on this chain. The
 /// target block must be an ancestor of base, therefore `height <= base.height`.
-pub(crate) fn canonical_at_height<Block: BlockT<Hash=H256>, C: HeaderBackend<Block>>(
-	provider: C,
+pub(crate) fn canonical_at_height<Block: BlockT, C: HeaderBackend<Block>>(
+	provider: &C,
 	base: (Block::Hash, NumberFor<Block>),
 	base_is_canonical: bool,
 	height: NumberFor<Block>,

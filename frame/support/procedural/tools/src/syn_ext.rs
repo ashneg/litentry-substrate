@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -59,6 +59,11 @@ macro_rules! groups_impl {
 			}
 		}
 
+		impl <P: Clone> Clone for $name<P> {
+			fn clone(&self) -> Self {
+				Self { token: self.token.clone(), content: self.content.clone() }
+			}
+		}
 	}
 }
 
@@ -72,11 +77,11 @@ pub struct PunctuatedInner<P,T,V> {
 	pub variant: V,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NoTrailing;
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Trailing;
 
 pub type Punctuated<P,T> = PunctuatedInner<P,T,NoTrailing>;
@@ -104,6 +109,12 @@ impl<P: Parse, T: Parse> Parse for PunctuatedInner<P,T,NoTrailing> {
 impl<P: ToTokens, T: ToTokens, V> ToTokens for PunctuatedInner<P,T,V> {
 	fn to_tokens(&self, tokens: &mut TokenStream) {
 		self.inner.to_tokens(tokens)
+	}
+}
+
+impl <P: Clone, T: Clone, V: Clone> Clone for PunctuatedInner<P, T, V> {
+	fn clone(&self) -> Self {
+		Self { inner: self.inner.clone(), variant: self.variant.clone() }
 	}
 }
 
@@ -153,31 +164,6 @@ impl ToTokens for OuterAttributes {
 	}
 }
 
-#[derive(Debug)]
-pub struct Opt<P> {
-	pub inner: Option<P>,
-}
-
-impl<P: Parse> Parse for Opt<P> {
-	// Note that it cost a double parsing (same as enum derive)
-	fn parse(input: ParseStream) -> Result<Self> {
-		let inner = match input.fork().parse::<P>() {
-			Ok(_item) => Some(input.parse().expect("Same parsing ran before")),
-			Err(_e) => None,
-		};
-
-		Ok(Opt { inner })
-	}
-}
-
-impl<P: ToTokens> ToTokens for Opt<P> {
-	fn to_tokens(&self, tokens: &mut TokenStream) {
-		if let Some(ref p) = self.inner {
-			p.to_tokens(tokens);
-		}
-	}
-}
-
 pub fn extract_type_option(typ: &syn::Type) -> Option<syn::Type> {
 	if let syn::Type::Path(ref path) = typ {
 		let v = path.path.segments.last()?;
@@ -194,7 +180,7 @@ pub fn extract_type_option(typ: &syn::Type) -> Option<syn::Type> {
 	None
 }
 
-/// Auxialary structure to check if a given `Ident` is contained in an ast.
+/// Auxiliary structure to check if a given `Ident` is contained in an ast.
 struct ContainsIdent<'a> {
 	ident: &'a Ident,
 	result: bool,

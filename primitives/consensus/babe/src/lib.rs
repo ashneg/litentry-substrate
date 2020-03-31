@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -19,21 +19,25 @@
 #![forbid(unsafe_code, missing_docs, unused_variables, unused_imports)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
-mod digest;
+pub mod digests;
 pub mod inherents;
 
-use codec::{Encode, Decode};
-use rstd::vec::Vec;
-use sr_primitives::{ConsensusEngineId, RuntimeDebug};
+pub use sp_consensus_vrf::schnorrkel::{
+	Randomness, VRF_PROOF_LENGTH, VRF_OUTPUT_LENGTH, RANDOMNESS_LENGTH
+};
 
-#[cfg(feature = "std")]
-pub use digest::{BabePreDigest, CompatibleDigestItem};
-pub use digest::{BABE_VRF_PREFIX, RawBabePreDigest, NextEpochDescriptor};
+use codec::{Encode, Decode};
+use sp_std::vec::Vec;
+use sp_runtime::{ConsensusEngineId, RuntimeDebug};
+use crate::digests::NextEpochDescriptor;
 
 mod app {
-	use app_crypto::{app_crypto, key_types::BABE, sr25519};
+	use sp_application_crypto::{app_crypto, key_types::BABE, sr25519};
 	app_crypto!(sr25519, BABE);
 }
+
+/// The prefix used by BABE for its VRF keys.
+pub const BABE_VRF_PREFIX: &[u8] = b"substrate-babe-vrf";
 
 /// A Babe authority keypair. Necessarily equivalent to the schnorrkel public key used in
 /// the main Babe module. If that ever changes, then this must, too.
@@ -49,12 +53,6 @@ pub type AuthorityId = app::Public;
 
 /// The `ConsensusEngineId` of BABE.
 pub const BABE_ENGINE_ID: ConsensusEngineId = *b"BABE";
-
-/// The length of the VRF output
-pub const VRF_OUTPUT_LENGTH: usize = 32;
-
-/// The length of the VRF proof
-pub const VRF_PROOF_LENGTH: usize = 64;
 
 /// The length of the public key
 pub const PUBLIC_KEY_LENGTH: usize = 32;
@@ -77,40 +75,6 @@ pub type BabeAuthorityWeight = u64;
 
 /// The weight of a BABE block.
 pub type BabeBlockWeight = u32;
-
-/// BABE epoch information
-#[derive(Decode, Encode, Default, PartialEq, Eq, Clone, RuntimeDebug)]
-pub struct Epoch {
-	/// The epoch index
-	pub epoch_index: u64,
-	/// The starting slot of the epoch,
-	pub start_slot: SlotNumber,
-	/// The duration of this epoch
-	pub duration: SlotNumber,
-	/// The authorities and their weights
-	pub authorities: Vec<(AuthorityId, BabeAuthorityWeight)>,
-	/// Randomness for this epoch
-	pub randomness: [u8; VRF_OUTPUT_LENGTH],
-}
-
-impl Epoch {
-	/// "increment" the epoch, with given descriptor for the next.
-	pub fn increment(&self, descriptor: NextEpochDescriptor) -> Epoch {
-		Epoch {
-			epoch_index: self.epoch_index + 1,
-			start_slot: self.start_slot + self.duration,
-			duration: self.duration,
-			authorities: descriptor.authorities,
-			randomness: descriptor.randomness,
-		}
-	}
-
-	/// Produce the "end slot" of the epoch. This is NOT inclusive to the epoch,
-	// i.e. the slots covered by the epoch are `self.start_slot .. self.end_slot()`.
-	pub fn end_slot(&self) -> SlotNumber {
-		self.start_slot + self.duration
-	}
-}
 
 /// An consensus log item for BABE.
 #[derive(Decode, Encode, Clone, PartialEq, Eq)]
@@ -149,7 +113,7 @@ pub struct BabeConfiguration {
 	pub genesis_authorities: Vec<(AuthorityId, BabeAuthorityWeight)>,
 
 	/// The randomness for the genesis epoch.
-	pub randomness: [u8; VRF_OUTPUT_LENGTH],
+	pub randomness: Randomness,
 
 	/// Whether this chain should run with secondary slots, which are assigned
 	/// in round-robin manner.
@@ -157,7 +121,7 @@ pub struct BabeConfiguration {
 }
 
 #[cfg(feature = "std")]
-impl slots::SlotData for BabeConfiguration {
+impl sp_consensus::SlotData for BabeConfiguration {
 	fn slot_duration(&self) -> u64 {
 		self.slot_duration
 	}
@@ -165,7 +129,7 @@ impl slots::SlotData for BabeConfiguration {
 	const SLOT_KEY: &'static [u8] = b"babe_configuration";
 }
 
-sr_api::decl_runtime_apis! {
+sp_api::decl_runtime_apis! {
 	/// API necessary for block authorship with BABE.
 	pub trait BabeApi {
 		/// Return the configuration for BABE. Currently,
@@ -173,5 +137,8 @@ sr_api::decl_runtime_apis! {
 		///
 		/// Dynamic configuration may be supported in the future.
 		fn configuration() -> BabeConfiguration;
+
+		/// Returns the slot number that started the current epoch.
+		fn current_epoch_start() -> SlotNumber;
 	}
 }

@@ -20,14 +20,22 @@
 
 # Wasm execution and the wasm side of Substrate Runtime Interface
 /client/executor/ @pepyakin
-/primitives/sr-io/ @pepyakin
+/primitives/io/ @pepyakin @NikVolf
+
+# Crypto, execution extensions, etc.
+/primitives/core/ @NikVolf
+
+# Block production
+/primitives/authorship/ @NikVolf
+/client/basic-authorship/ @NikVolf
 
 # Sandboxing capability of Substrate Runtime
 /primitives/sr-sandbox/ @pepyakin
 /primitives/core/src/sandbox.rs @pepyakin
 
 # Transaction pool
-/client/transaction-pool/ @tomusdrw
+/client/transaction-pool/ @tomusdrw @NikVolf
+/primitives/transaction-pool/ @tomusdrw @NikVolf
 
 # Offchain
 /client/offchain/ @tomusdrw
@@ -45,23 +53,40 @@
 /client/finality-grandpa/ @andresilva @DemiMarie-parity
 /client/consensus/babe/ @andresilva @DemiMarie-parity
 /client/consensus/slots/ @andresilva @DemiMarie-parity
+/client/consensus/pow/ @sorpaas
+/primitives/consensus/pow/ @sorpaas
 
 # Contracts
-/frame/contracts/ @pepyakin @thiolliere @jimpo
+/frame/contracts/ @pepyakin @thiolliere
 /frame/contracts/src/wasm/runtime.rs @Robbepop
+
+# EVM
+/frame/evm/ @sorpaas
 
 # Inflation points
 /frame/staking/src/inflation.rs @thiolliere
 
-# NPoS and Governance
+# NPoS and Governance and Phragmén
 /frame/staking/ @kianenigma
-/frame/election/ @kianenigma
+/frame/elections/ @kianenigma
+/frame/elections-phragmen/ @kianenigma
+/primitives/phragmen/ @kianenigma
+
+# Fixed point arithmetic
+/primitives/sp-arithmetic/ @kianenigma @thiolliere
 
 # End to end testing of substrate node
 /bin/node/executor/ @kianenigma
 
 # Transaction weight stuff
-/primitives/sr-primitives/src/weights.rs @kianenigma
+/frame/support/src/weights.rs @kianenigma
 
 # Support crates
 /frame/support/ @thiolliere @kianenigma
+
+# Authority discovery
+/client/authority-discovery/ @mxinden
+/frame/authority-discovery/ @mxinden
+
+# Prometheus endpoint
+/utils/prometheus/ @mxinden

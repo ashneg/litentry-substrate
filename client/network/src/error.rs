@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -16,8 +16,6 @@
 
 //! Substrate network possible errors.
 
-use client_api;
-
 use libp2p::{PeerId, Multiaddr};
 
 use std::fmt;
@@ -31,7 +29,7 @@ pub enum Error {
 	/// Io error
 	Io(std::io::Error),
 	/// Client error
-	Client(client_api::error::Error),
+	Client(sp_blockchain::Error),
 	/// The same bootnode (based on address) is registered with two different peer ids.
 	#[display(
 		fmt = "The same bootnode (`{}`) is registered with two different peer ids: `{}` and `{}`",
@@ -47,6 +45,8 @@ pub enum Error {
 		/// The second peer id that was found for the bootnode.
 		second_id: PeerId,
 	},
+	/// Prometheus metrics error.
+	Prometheus(prometheus_endpoint::PrometheusError)
 }
 
 // Make `Debug` use the `Display` implementation.
@@ -62,6 +62,7 @@ impl std::error::Error for Error {
 			Error::Io(ref err) => Some(err),
 			Error::Client(ref err) => Some(err),
 			Error::DuplicateBootnode { .. } => None,
+			Error::Prometheus(ref err) => Some(err),
 		}
 	}
 }

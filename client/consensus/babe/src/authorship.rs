@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -17,13 +17,18 @@
 //! BABE authority selection and slot claiming.
 
 use merlin::Transcript;
-use babe_primitives::{AuthorityId, BabeAuthorityWeight, BABE_ENGINE_ID, BABE_VRF_PREFIX};
-use babe_primitives::{Epoch, SlotNumber, AuthorityPair, BabePreDigest, BabeConfiguration};
-use primitives::{U256, blake2_256};
+use sp_consensus_babe::{
+	AuthorityId, BabeAuthorityWeight, BABE_ENGINE_ID, BABE_VRF_PREFIX,
+	SlotNumber, AuthorityPair, BabeConfiguration
+};
+use sp_consensus_babe::digests::{PreDigest, PrimaryPreDigest, SecondaryPreDigest};
+use sp_consensus_vrf::schnorrkel::{VRFOutput, VRFProof};
+use sp_core::{U256, blake2_256};
 use codec::Encode;
 use schnorrkel::vrf::VRFInOut;
-use primitives::Pair;
-use keystore::KeyStorePtr;
+use sp_core::Pair;
+use sc_keystore::KeyStorePtr;
+use super::Epoch;
 
 /// Calculates the primary selection threshold for a given authority, taking
 /// into account `c` (`1 - c` represents the probability of a slot being empty).
@@ -82,16 +87,15 @@ pub(super) fn secondary_slot_author(
 	Some(&expected_author.0)
 }
 
-#[allow(deprecated)]
 pub(super) fn make_transcript(
 	randomness: &[u8],
 	slot_number: u64,
 	epoch: u64,
 ) -> Transcript {
 	let mut transcript = Transcript::new(&BABE_ENGINE_ID);
-	transcript.commit_bytes(b"slot number", &slot_number.to_le_bytes());
-	transcript.commit_bytes(b"current epoch", &epoch.to_le_bytes());
-	transcript.commit_bytes(b"chain randomness", randomness);
+	transcript.append_u64(b"slot number", slot_number);
+	transcript.append_u64(b"current epoch", epoch);
+	transcript.append_message(b"chain randomness", randomness);
 	transcript
 }
 
@@ -104,7 +108,7 @@ fn claim_secondary_slot(
 	authorities: &[(AuthorityId, BabeAuthorityWeight)],
 	keystore: &KeyStorePtr,
 	randomness: [u8; 32],
-) -> Option<(BabePreDigest, AuthorityPair)> {
+) -> Option<(PreDigest, AuthorityPair)> {
 	if authorities.is_empty() {
 		return None;
 	}
@@ -124,10 +128,10 @@ fn claim_secondary_slot(
 		})
 	{
 		if pair.public() == *expected_author {
-			let pre_digest = BabePreDigest::Secondary {
+			let pre_digest = PreDigest::Secondary(SecondaryPreDigest {
 				slot_number,
 				authority_index: authority_index as u32,
-			};
+			});
 
 			return Some((pre_digest, pair));
 		}
@@ -140,12 +144,12 @@ fn claim_secondary_slot(
 /// a primary VRF based slot. If we are not able to claim it, then if we have
 /// secondary slots enabled for the given epoch, we will fallback to trying to
 /// claim a secondary slot.
-pub(super) fn claim_slot(
+pub fn claim_slot(
 	slot_number: SlotNumber,
 	epoch: &Epoch,
 	config: &BabeConfiguration,
 	keystore: &KeyStorePtr,
-) -> Option<(BabePreDigest, AuthorityPair)> {
+) -> Option<(PreDigest, AuthorityPair)> {
 	claim_primary_slot(slot_number, epoch, config.c, keystore)
 		.or_else(|| {
 			if config.secondary_slots {
@@ -162,8 +166,8 @@ pub(super) fn claim_slot(
 }
 
 fn get_keypair(q: &AuthorityPair) -> &schnorrkel::Keypair {
-	use primitives::crypto::IsWrappedBy;
-	primitives::sr25519::Pair::from_ref(q).as_ref()
+	use sp_core::crypto::IsWrappedBy;
+	sp_core::sr25519::Pair::from_ref(q).as_ref()
 }
 
 /// Claim a primary slot if it is our turn.  Returns `None` if it is not our turn.
@@ -175,7 +179,7 @@ fn claim_primary_slot(
 	epoch: &Epoch,
 	c: (u64, u64),
 	keystore: &KeyStorePtr,
-) -> Option<(BabePreDigest, AuthorityPair)> {
+) -> Option<(PreDigest, AuthorityPair)> {
 	let Epoch { authorities, randomness, epoch_index, .. } = epoch;
 	let keystore = keystore.read();
 
@@ -196,12 +200,12 @@ fn claim_primary_slot(
 		let pre_digest = get_keypair(&pair)
 			.vrf_sign_after_check(transcript, |inout| super::authorship::check_primary_threshold(inout, threshold))
 			.map(|s| {
-				BabePreDigest::Primary {
+				PreDigest::Primary(PrimaryPreDigest {
 					slot_number,
-					vrf_output: s.0.to_output(),
-					vrf_proof: s.1,
+					vrf_output: VRFOutput(s.0.to_output()),
+					vrf_proof: VRFProof(s.1),
 					authority_index: authority_index as u32,
-				}
+				})
 			});
 
 		// early exit on first successful claim

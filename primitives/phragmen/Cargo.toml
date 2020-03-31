@@ -1,23 +1,31 @@
 [package]
-name = "substrate-phragmen"
-version = "2.0.0"
+name = "sp-phragmen"
+version = "2.0.0-alpha.5"
 authors = ["Parity Technologies <admin@parity.io>"]
 edition = "2018"
+license = "GPL-3.0"
+homepage = "https://substrate.dev"
+repository = "https://github.com/paritytech/substrate/"
+description = "Phragmen primitives"
 
 [dependencies]
+codec = { package = "parity-scale-codec", version = "1.0.0", default-features = false, features = ["derive"] }
 serde = { version = "1.0.101", optional = true, features = ["derive"] }
-rstd = { package = "sr-std", path = "../sr-std", default-features = false }
-sr-primitives = { path = "../../primitives/sr-primitives", default-features = false }
+sp-std = { version = "2.0.0-alpha.5", default-features = false, path = "../std" }
+sp-runtime = { version = "2.0.0-alpha.5", default-features = false, path = "../../primitives/runtime" }
+sp-phragmen-compact = { version = "2.0.0-alpha.4", path = "./compact" }
 
 [dev-dependencies]
-runtime-io ={ package = "sr-io", path = "../../primitives/sr-io" }
-support = { package = "frame-support", path = "../../frame/support" }
-rand = "0.7.2"
+substrate-test-utils = { version = "2.0.0-alpha.5", path = "../../test-utils" }
+rand = "0.7.3"
+sp-phragmen = { path = "." }
 
 [features]
 default = ["std"]
+bench = []
 std = [
+	"codec/std",
 	"serde",
-	"rstd/std",
-	"sr-primitives/std",
+	"sp-std/std",
+	"sp-runtime/std",
 ]

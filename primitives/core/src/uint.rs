@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -16,13 +16,13 @@
 
 //! An unsigned fixed-size integer.
 
-pub use primitive_types::U256;
+pub use primitive_types::{U256, U512};
 
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use codec::{Encode, Decode};
-	use substrate_serializer as ser;
+	use sp_serializer as ser;
 
 	macro_rules! test {
 		($name: ident, $test_name: ident) => {

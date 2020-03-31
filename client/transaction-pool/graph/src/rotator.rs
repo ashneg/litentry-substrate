@@ -1,4 +1,4 @@
-// Copyright 2018-2019 Parity Technologies (UK) Ltd.
+// Copyright 2018-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -23,9 +23,10 @@ use std::{
 	collections::HashMap,
 	hash,
 	iter,
-	time::{Duration, Instant},
+	time::Duration,
 };
 use parking_lot::RwLock;
+use wasm_timer::Instant;
 
 use crate::base_pool::Transaction;
 
@@ -99,6 +100,7 @@ impl<Hash: hash::Hash + Eq + Clone> PoolRotator<Hash> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use sp_runtime::transaction_validity::TransactionSource;
 
 	type Hash = u64;
 	type Ex = ();
@@ -121,6 +123,7 @@ mod tests {
 			requires: vec![],
 			provides: vec![],
 			propagate: true,
+			source: TransactionSource::External,
 		};
 
 		(hash, tx)
@@ -187,6 +190,7 @@ mod tests {
 				requires: vec![],
 				provides: vec![],
 				propagate: true,
+				source: TransactionSource::External,
 			}
 		}
 

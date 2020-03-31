@@ -1,4 +1,4 @@
-// Copyright 2017-2019 Parity Technologies (UK) Ltd.
+// Copyright 2017-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -19,26 +19,39 @@
 //! The [`Params`] struct is the struct that must be passed in order to initialize the networking.
 //! See the documentation of [`Params`].
 
-pub use crate::protocol::ProtocolConfig;
+pub use crate::chain::{Client, FinalityProofProvider};
+pub use crate::on_demand_layer::OnDemand;
+pub use crate::service::{TransactionPool, EmptyTransactionPool};
 pub use libp2p::{identity, core::PublicKey, wasm_ext::ExtTransport, build_multiaddr};
 
-use crate::chain::{Client, FinalityProofProvider};
-use crate::on_demand_layer::OnDemand;
-use crate::service::{ExHashT, TransactionPool};
+// Note: this re-export shouldn't be part of the public API of the crate and will be removed in
+// the future.
+#[doc(hidden)]
+pub use crate::protocol::ProtocolConfig;
+
+use crate::service::ExHashT;
+
 use bitflags::bitflags;
-use consensus::{block_validation::BlockAnnounceValidator, import_queue::ImportQueue};
-use sr_primitives::traits::{Block as BlockT};
+use sp_consensus::{block_validation::BlockAnnounceValidator, import_queue::ImportQueue};
+use sp_runtime::traits::{Block as BlockT};
 use libp2p::identity::{Keypair, ed25519};
 use libp2p::wasm_ext;
 use libp2p::{PeerId, Multiaddr, multiaddr};
 use core::{fmt, iter};
+use std::{future::Future, pin::Pin};
 use std::{error::Error, fs, io::{self, Write}, net::Ipv4Addr, path::{Path, PathBuf}, sync::Arc};
 use zeroize::Zeroize;
+use prometheus_endpoint::Registry;
+
 
 /// Network initialization parameters.
-pub struct Params<B: BlockT, S, H: ExHashT> {
+pub struct Params<B: BlockT, H: ExHashT> {
 	/// Assigned roles for our node (full, light, ...).
 	pub roles: Roles,
+
+	/// How to spawn background tasks. If you pass `None`, then a threads pool will be used by
+	/// default.
+	pub executor: Option<Box<dyn Fn(Pin<Box<dyn Future<Output = ()> + Send>>) + Send>>,
 
 	/// Network layer configuration.
 	pub network_config: NetworkConfiguration,
@@ -77,11 +90,11 @@ pub struct Params<B: BlockT, S, H: ExHashT> {
 	/// valid.
 	pub import_queue: Box<dyn ImportQueue<B>>,
 
-	/// Customization of the network. Use this to plug additional networking capabilities.
-	pub specialization: S,
-
 	/// Type to check incoming block announcements.
 	pub block_announce_validator: Box<dyn BlockAnnounceValidator<B> + Send>,
+
+	/// Registry for recording prometheus metrics to.
+	pub metrics_registry: Option<Registry>,
 }
 
 bitflags! {
@@ -112,6 +125,12 @@ impl Roles {
 	/// Does this role represents a client that does not hold full chain data locally?
 	pub fn is_light(&self) -> bool {
 		!self.is_full()
+	}
+}
+
+impl fmt::Display for Roles {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{:?}", self)
 	}
 }
 
@@ -171,7 +190,7 @@ impl ProtocolId {
 /// # Example
 ///
 /// ```
-/// # use substrate_network::{Multiaddr, PeerId, config::parse_str_addr};
+/// # use sc_network::{Multiaddr, PeerId, config::parse_str_addr};
 /// let (peer_id, addr) = parse_str_addr(
 /// 	"/ip4/198.51.100.19/tcp/30333/p2p/QmSk5HQbn6LhUwDiNMseVUjuRYhEtYj4aUZ6WfWoGURpdV"
 /// ).unwrap();
@@ -236,9 +255,9 @@ impl From<multiaddr::Error> for ParseErr {
 #[derive(Clone, Debug)]
 pub struct NetworkConfiguration {
 	/// Directory path to store general network configuration. None means nothing will be saved.
-	pub config_path: Option<String>,
+	pub config_path: Option<PathBuf>,
 	/// Directory path to store network-specific configuration. None means nothing will be saved.
-	pub net_config_path: Option<String>,
+	pub net_config_path: Option<PathBuf>,
 	/// Multiaddresses to listen for incoming connections.
 	pub listen_addresses: Vec<Multiaddr>,
 	/// Multiaddresses to advertise. Detected automatically if empty.
@@ -255,6 +274,8 @@ pub struct NetworkConfiguration {
 	pub reserved_nodes: Vec<String>,
 	/// The non-reserved peer mode.
 	pub non_reserved_mode: NonReservedPeerMode,
+	/// List of sentry node public addresses.
+	pub sentry_nodes: Vec<String>,
 	/// Client identifier. Sent over the wire for debugging purposes.
 	pub client_version: String,
 	/// Name of the node. Sent over the wire for debugging purposes.
@@ -278,12 +299,14 @@ impl Default for NetworkConfiguration {
 			out_peers: 75,
 			reserved_nodes: Vec::new(),
 			non_reserved_mode: NonReservedPeerMode::Accept,
+			sentry_nodes: Vec::new(),
 			client_version: "unknown".into(),
 			node_name: "unknown".into(),
 			transport: TransportConfig::Normal {
 				enable_mdns: false,
 				allow_private_ipv4: true,
 				wasm_external_transport: None,
+				use_yamux_flow_control: false,
 			},
 			max_parallel_downloads: 5,
 		}
@@ -329,8 +352,9 @@ pub enum TransportConfig {
 		enable_mdns: bool,
 
 		/// If true, allow connecting to private IPv4 addresses (as defined in
-		/// [RFC1918](https://tools.ietf.org/html/rfc1918)), unless the address has been passed in
-		/// [`NetworkConfiguration::reserved_nodes`] or [`NetworkConfiguration::boot_nodes`].
+		/// [RFC1918](https://tools.ietf.org/html/rfc1918)). Irrelevant for addresses that have
+		/// been passed in [`NetworkConfiguration::reserved_nodes`] or
+		/// [`NetworkConfiguration::boot_nodes`].
 		allow_private_ipv4: bool,
 
 		/// Optional external implementation of a libp2p transport. Used in WASM contexts where we
@@ -340,6 +364,8 @@ pub enum TransportConfig {
 		/// This parameter exists whatever the target platform is, but it is expected to be set to
 		/// `Some` only when compiling for WASM.
 		wasm_external_transport: Option<wasm_ext::ExtTransport>,
+		/// Use flow control for yamux streams if set to true.
+		use_yamux_flow_control: bool,
 	},
 
 	/// Only allow connections within the same process.
@@ -502,7 +528,11 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use tempdir::TempDir;
+	use tempfile::TempDir;
+
+	fn tempdir_with_prefix(prefix: &str) -> TempDir {
+		tempfile::Builder::new().prefix(prefix).tempdir().unwrap()
+	}
 
 	fn secret_bytes(kp: &Keypair) -> Vec<u8> {
 		match kp {
@@ -514,7 +544,7 @@ mod tests {
 
 	#[test]
 	fn test_secret_file() {
-		let tmp = TempDir::new("x").unwrap();
+		let tmp = tempdir_with_prefix("x");
 		std::fs::remove_dir(tmp.path()).unwrap(); // should be recreated
 		let file = tmp.path().join("x").to_path_buf();
 		let kp1 = NodeKeyConfig::Ed25519(Secret::File(file.clone())).into_keypair().unwrap();

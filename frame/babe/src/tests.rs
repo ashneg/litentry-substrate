@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -17,9 +17,10 @@
 //! Consensus extension module tests for BABE consensus.
 
 use super::*;
-use mock::{new_test_ext, Babe, Test};
-use sr_primitives::{traits::OnFinalize, testing::{Digest, DigestItem}};
-use session::ShouldEndSession;
+use mock::*;
+use frame_support::traits::OnFinalize;
+use pallet_session::ShouldEndSession;
+use sp_consensus_vrf::schnorrkel::{RawVRFOutput, RawVRFProof};
 
 const EMPTY_RANDOMNESS: [u8; 32] = [
 	74, 25, 49, 128, 53, 97, 244, 49,
@@ -27,22 +28,6 @@ const EMPTY_RANDOMNESS: [u8; 32] = [
 	133, 49, 213, 228, 86, 161, 164, 127,
 	217, 153, 138, 37, 48, 192, 248, 0,
 ];
-
-fn make_pre_digest(
-	authority_index: babe_primitives::AuthorityIndex,
-	slot_number: babe_primitives::SlotNumber,
-	vrf_output: [u8; babe_primitives::VRF_OUTPUT_LENGTH],
-	vrf_proof: [u8; babe_primitives::VRF_PROOF_LENGTH],
-) -> Digest {
-	let digest_data = babe_primitives::RawBabePreDigest::Primary {
-		authority_index,
-		slot_number,
-		vrf_output,
-		vrf_proof,
-	};
-	let log = DigestItem::PreRuntime(babe_primitives::BABE_ENGINE_ID, digest_data.encode());
-	Digest { logs: vec![log] }
-}
 
 #[test]
 fn empty_randomness_is_correct() {
@@ -66,22 +51,26 @@ fn check_module() {
 	})
 }
 
-type System = system::Module<Test>;
-
 #[test]
 fn first_block_epoch_zero_start() {
 	new_test_ext(vec![0, 1, 2, 3]).execute_with(|| {
 		let genesis_slot = 100;
-		let first_vrf = [1; 32];
+		let first_vrf = RawVRFOutput([1; 32]);
 		let pre_digest = make_pre_digest(
 			0,
 			genesis_slot,
-			first_vrf,
-			[0xff; 64],
+			first_vrf.clone(),
+			RawVRFProof([0xff; 64]),
 		);
 
 		assert_eq!(Babe::genesis_slot(), 0);
-		System::initialize(&1, &Default::default(), &Default::default(), &pre_digest);
+		System::initialize(
+			&1,
+			&Default::default(),
+			&Default::default(),
+			&pre_digest,
+			Default::default(),
+		);
 
 		// see implementation of the function for details why: we issue an
 		// epoch-change digest but don't do it via the normal session mechanism.
@@ -103,8 +92,8 @@ fn first_block_epoch_zero_start() {
 		assert_eq!(header.digest.logs[0], pre_digest.logs[0]);
 
 		let authorities = Babe::authorities();
-		let consensus_log = babe_primitives::ConsensusLog::NextEpochData(
-			babe_primitives::NextEpochDescriptor {
+		let consensus_log = sp_consensus_babe::ConsensusLog::NextEpochData(
+			sp_consensus_babe::digests::NextEpochDescriptor {
 				authorities,
 				randomness: Babe::randomness(),
 			}
@@ -122,5 +111,26 @@ fn authority_index() {
 		assert_eq!(
 			Babe::find_author((&[(BABE_ENGINE_ID, &[][..])]).into_iter().cloned()), None,
 			"Trivially invalid authorities are ignored")
+	})
+}
+
+#[test]
+fn can_predict_next_epoch_change() {
+	new_test_ext(vec![]).execute_with(|| {
+		assert_eq!(<Test as Trait>::EpochDuration::get(), 3);
+		// this sets the genesis slot to 6;
+		go_to_block(1, 6);
+		assert_eq!(Babe::genesis_slot(), 6);
+		assert_eq!(Babe::current_slot(), 6);
+		assert_eq!(Babe::epoch_index(), 0);
+
+		progress_to_block(5);
+
+		assert_eq!(Babe::epoch_index(), 5 / 3);
+		assert_eq!(Babe::current_slot(), 10);
+
+		// next epoch change will be at
+		assert_eq!(Babe::current_epoch_start(), 9); // next change will be 12, 2 slots from now
+		assert_eq!(Babe::next_expected_epoch_change(System::block_number()), Some(5 + 2));
 	})
 }

@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies (UK) Ltd.
+// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
 // Substrate is free software: you can redistribute it and/or modify
@@ -15,22 +15,25 @@
 // along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
 
 #[cfg(not(feature = "std"))]
-use rstd::prelude::*;
+use sp_std::prelude::*;
 use codec::{FullCodec, Encode, EncodeAppend, EncodeLike, Decode};
 use crate::{storage::{self, unhashed}, hash::{Twox128, StorageHasher}, traits::Len};
 
 /// Generator for `StorageValue` used by `decl_storage`.
 ///
-/// Value is stored at:
+/// By default value is stored at:
 /// ```nocompile
-/// Twox128(unhashed_key)
+/// Twox128(module_prefix) ++ Twox128(storage_prefix)
 /// ```
 pub trait StorageValue<T: FullCodec> {
 	/// The type that get/take returns.
 	type Query;
 
-	/// Unhashed key used in storage
-	fn unhashed_key() -> &'static [u8];
+	/// Module prefix. Used for generating final key.
+	fn module_prefix() -> &'static [u8];
+
+	/// Storage prefix. Used for generating final key.
+	fn storage_prefix() -> &'static [u8];
 
 	/// Convert an optional value retrieved from storage to the type queried.
 	fn from_optional_value_to_query(v: Option<T>) -> Self::Query;
@@ -39,15 +42,18 @@ pub trait StorageValue<T: FullCodec> {
 	fn from_query_to_optional_value(v: Self::Query) -> Option<T>;
 
 	/// Generate the full key used in top storage.
-	fn storage_value_final_key() -> [u8; 16] {
-		Twox128::hash(Self::unhashed_key())
+	fn storage_value_final_key() -> [u8; 32] {
+		let mut final_key = [0u8; 32];
+		final_key[0..16].copy_from_slice(&Twox128::hash(Self::module_prefix()));
+		final_key[16..32].copy_from_slice(&Twox128::hash(Self::storage_prefix()));
+		final_key
 	}
 }
 
 impl<T: FullCodec, G: StorageValue<T>> storage::StorageValue<T> for G {
 	type Query = G::Query;
 
-	fn hashed_key() -> [u8; 16] {
+	fn hashed_key() -> [u8; 32] {
 		Self::storage_value_final_key()
 	}
 
@@ -58,6 +64,10 @@ impl<T: FullCodec, G: StorageValue<T>> storage::StorageValue<T> for G {
 	fn get() -> Self::Query {
 		let value = unhashed::get(&Self::storage_value_final_key());
 		G::from_optional_value_to_query(value)
+	}
+
+	fn try_get() -> Result<T, ()> {
+		unhashed::get(&Self::storage_value_final_key()).ok_or(())
 	}
 
 	fn translate<O: Decode, F: FnOnce(Option<O>) -> Option<T>>(f: F) -> Result<Option<T>, ()> {
@@ -79,6 +89,14 @@ impl<T: FullCodec, G: StorageValue<T>> storage::StorageValue<T> for G {
 
 	fn put<Arg: EncodeLike<T>>(val: Arg) {
 		unhashed::put(&Self::storage_value_final_key(), &val)
+	}
+
+	fn set(maybe_val: Self::Query) {
+		if let Some(val) = G::from_query_to_optional_value(maybe_val) {
+			unhashed::put(&Self::storage_value_final_key(), &val)
+		} else {
+			unhashed::kill(&Self::storage_value_final_key())
+		}
 	}
 
 	fn kill() {
@@ -121,7 +139,7 @@ impl<T: FullCodec, G: StorageValue<T>> storage::StorageValue<T> for G {
 			.unwrap_or_else(|| {
 				match G::from_query_to_optional_value(G::from_optional_value_to_query(None)) {
 					Some(value) => value.encode(),
-					None => vec![],
+					None => Vec::new(),
 				}
 			});
 
