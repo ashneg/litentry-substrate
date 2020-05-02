@@ -32,6 +32,9 @@ pub struct Identity<Hash> {
     id: Hash,
 }
 
+#[derive(Default, Clone, Eq, PartialEq, Encode, Decode, RuntimeDebug)]
+pub struct Url(pub Vec<u8>);
+
 #[derive(Encode, Decode, Default, Clone, PartialEq, RuntimeDebug)]
 pub struct AuthorizedToken<Hash, Balance> {
     id: Hash,
@@ -62,6 +65,7 @@ decl_event!(
             IdentityCreated(AccountId, Hash),
             AuthorizedTokenCreated(AccountId, Hash, Hash),
             AuthorizedTokenTransferred(AccountId, AccountId, Hash),
+            AuthenticaterRequest(AccountId, Hash, Vec<u8>),
             //ACTION: Create a `Transferred` event here
         }
 );
@@ -185,6 +189,14 @@ decl_module! {
             Self::token_transfer_from(sender.clone(), to, token_id)?;
             <frame_system::Module<T>>::inc_account_nonce(&sender);
 
+            Ok(())
+        }
+
+        #[weight = SimpleDispatchInfo::FixedNormal(100)]
+        fn request_authentication(origin, token_id: T::Hash, url:Url) -> DispatchResult {
+            let sender = ensure_signed(origin)?;
+
+            Self::deposit_event(RawEvent::AuthenticaterRequest(sender, token_id, url));
             Ok(())
         }
 
