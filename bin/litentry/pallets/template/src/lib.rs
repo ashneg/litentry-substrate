@@ -1,6 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use balances;
+use pallet_balances;
 use codec::{Decode, Encode};
 use frame_support::traits::Randomness;
 use frame_support::{
@@ -11,6 +11,7 @@ use frame_support::{
     StorageMap, StorageValue,
 };
 use frame_system::{self as system, ensure_signed};
+use sp_std::prelude::*;
 use sp_runtime::{
     traits::{
         AtLeast32Bit, Bounded, Hash, Member,
@@ -32,9 +33,6 @@ pub struct Identity<Hash> {
     id: Hash,
 }
 
-#[derive(Default, Clone, Eq, PartialEq, Encode, Decode, RuntimeDebug)]
-pub struct Url(pub Vec<u8>);
-
 #[derive(Encode, Decode, Default, Clone, PartialEq, RuntimeDebug)]
 pub struct AuthorizedToken<Hash, Balance> {
     id: Hash,
@@ -45,10 +43,10 @@ pub struct AuthorizedToken<Hash, Balance> {
 }
 
 type AuthorizedTokenOf<T> =
-    AuthorizedToken<<T as system::Trait>::Hash, <T as balances::Trait>::Balance>;
+    AuthorizedToken<<T as system::Trait>::Hash, <T as pallet_balances::Trait>::Balance>;
 type IdentityOf<T> = Identity<<T as system::Trait>::Hash>;
 
-pub trait Trait: balances::Trait + system::Trait {
+pub trait Trait: pallet_balances::Trait + system::Trait {
     // Add other types and constants required to configure this pallet.
     /// The overarching event type.
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
@@ -193,7 +191,7 @@ decl_module! {
         }
 
         #[weight = SimpleDispatchInfo::FixedNormal(100)]
-        fn request_authentication(origin, token_id: T::Hash, url:Url) -> DispatchResult {
+        fn request_authentication(origin, token_id: T::Hash, url:Vec<u8>) -> DispatchResult {
             let sender = ensure_signed(origin)?;
 
             Self::deposit_event(RawEvent::AuthenticaterRequest(sender, token_id, url));
@@ -210,6 +208,9 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
+    // fn is_token_owner(token: &T::Hash, identity: &T::Hash) -> bool {
+    //     <IdentityAuthorizedTokensIndex<T>>::get(token).contains(who)
+    // }
     fn get_hash(sender: &T::AccountId) -> T::Hash {
         let nonce = <frame_system::Module<T>>::account_nonce(&sender);
         let random_hash_bytes = (T::Randomness::random_seed(), &sender, nonce)

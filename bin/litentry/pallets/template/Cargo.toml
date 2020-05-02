@@ -14,7 +14,8 @@ safe-mix = { default-features = false, version = '1.0.0' }
 sp-runtime = { version = "2.0.0-alpha.5", default-features = false, path = "../../../../primitives/runtime" }
 sp-io = { version = "2.0.0-alpha.5", default-features = false, path = "../../../../primitives/io" }
 sp-core = { version = "2.0.0-alpha.5", default-features = false, path = "../../../../primitives/core" }
-balances = { version = "2.0.0-alpha.5", default-features = false, package = "pallet-balances", path = "../../../../frame/balances" }
+sp-std = { version = "2.0.0-alpha.5", default-features = false, path = "../../../../primitives/std" }
+pallet-balances = { version = "2.0.0-alpha.5", default-features = false, package = "pallet-balances", path = "../../../../frame/balances" }
 litentry-utils = {version= "0.1.0", default-features = false, path="../../utils"}
 
 [dev-dependencies]
@@ -45,8 +46,9 @@ std = [
 	"sp-runtime/std",
 	'frame-system/std',
 		"sp-io/std",
+		"sp-std/std",
 		'sp-core/std',
-		'balances/std',
+		'pallet-balances/std',
 		'litentry-utils/std',
 		'randomness-collective-flip/std'
 ]
