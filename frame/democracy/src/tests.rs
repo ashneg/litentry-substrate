@@ -21,7 +21,7 @@ use std::cell::RefCell;
 use codec::Encode;
 use frame_support::{
 	impl_outer_origin, impl_outer_dispatch, assert_noop, assert_ok, parameter_types,
-	ord_parameter_types, traits::Contains, weights::Weight,
+	impl_outer_event, ord_parameter_types, traits::{Contains, OnInitialize}, weights::Weight,
 };
 use sp_core::H256;
 use sp_runtime::{
@@ -53,8 +53,22 @@ impl_outer_origin! {
 
 impl_outer_dispatch! {
 	pub enum Call for Test where origin: Origin {
+		frame_system::System,
 		pallet_balances::Balances,
 		democracy::Democracy,
+	}
+}
+
+mod democracy {
+	pub use crate::Event;
+}
+
+impl_outer_event! {
+	pub enum Event for Test {
+		system<T>,
+		pallet_balances<T>,
+		pallet_scheduler<T>,
+		democracy<T>,
 	}
 }
 
@@ -71,15 +85,18 @@ impl frame_system::Trait for Test {
 	type Origin = Origin;
 	type Index = u64;
 	type BlockNumber = u64;
-	type Call = ();
+	type Call = Call;
 	type Hash = H256;
 	type Hashing = BlakeTwo256;
 	type AccountId = u64;
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
-	type Event = ();
+	type Event = Event;
 	type BlockHashCount = BlockHashCount;
 	type MaximumBlockWeight = MaximumBlockWeight;
+	type DbWeight = ();
+	type BlockExecutionWeight = ();
+	type ExtrinsicBaseWeight = ();
 	type MaximumBlockLength = MaximumBlockLength;
 	type AvailableBlockRatio = AvailableBlockRatio;
 	type Version = ();
@@ -90,10 +107,17 @@ impl frame_system::Trait for Test {
 }
 parameter_types! {
 	pub const ExistentialDeposit: u64 = 1;
+	pub const MaximumWeight: u32 = 1000000;
+}
+impl pallet_scheduler::Trait for Test {
+	type Event = Event;
+	type Origin = Origin;
+	type Call = Call;
+	type MaximumWeight = MaximumWeight;
 }
 impl pallet_balances::Trait for Test {
 	type Balance = u64;
-	type Event = ();
+	type Event = Event;
 	type DustRemoval = ();
 	type ExistentialDeposit = ExistentialDeposit;
 	type AccountStore = System;
@@ -119,6 +143,8 @@ impl Contains<u64> for OneToFive {
 	fn sorted_members() -> Vec<u64> {
 		vec![1, 2, 3, 4, 5]
 	}
+	#[cfg(feature = "runtime-benchmarks")]
+	fn add(_m: &u64) {}
 }
 thread_local! {
 	static PREIMAGE_BYTE_DEPOSIT: RefCell<u64> = RefCell::new(0);
@@ -134,7 +160,7 @@ impl Get<bool> for InstantAllowed {
 }
 impl super::Trait for Test {
 	type Proposal = Call;
-	type Event = ();
+	type Event = Event;
 	type Currency = pallet_balances::Module<Self>;
 	type EnactmentPeriod = EnactmentPeriod;
 	type LaunchPeriod = LaunchPeriod;
@@ -152,19 +178,23 @@ impl super::Trait for Test {
 	type Slash = ();
 	type InstantOrigin = EnsureSignedBy<Six, u64>;
 	type InstantAllowed = InstantAllowed;
+	type Scheduler = Scheduler;
 }
 
-fn new_test_ext() -> sp_io::TestExternalities {
+pub fn new_test_ext() -> sp_io::TestExternalities {
 	let mut t = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
 	pallet_balances::GenesisConfig::<Test>{
 		balances: vec![(1, 10), (2, 20), (3, 30), (4, 40), (5, 50), (6, 60)],
 	}.assimilate_storage(&mut t).unwrap();
 	GenesisConfig::default().assimilate_storage(&mut t).unwrap();
-	sp_io::TestExternalities::new(t)
+	let mut ext = sp_io::TestExternalities::new(t);
+	ext.execute_with(|| System::set_block_number(1));
+	ext
 }
 
 type System = frame_system::Module<Test>;
 type Balances = pallet_balances::Module<Test>;
+type Scheduler = pallet_scheduler::Module<Test>;
 type Democracy = Module<Test>;
 
 #[test]
@@ -213,6 +243,7 @@ fn propose_set_balance_and_note(who: u64, value: u64, delay: u64) -> DispatchRes
 
 fn next_block() {
 	System::set_block_number(System::block_number() + 1);
+	Scheduler::on_initialize(System::block_number());
 	assert_eq!(Democracy::begin_block(System::block_number()), Ok(()));
 }
 

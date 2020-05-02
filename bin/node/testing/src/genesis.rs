@@ -97,7 +97,6 @@ pub fn config_endowed(
 		}),
 		pallet_contracts: Some(ContractsConfig {
 			current_schedule: Default::default(),
-			gas_price: 1 * MILLICENTS,
 		}),
 		pallet_babe: Some(Default::default()),
 		pallet_grandpa: Some(GrandpaConfig {
@@ -109,6 +108,7 @@ pub fn config_endowed(
 		pallet_collective_Instance1: Some(Default::default()),
 		pallet_collective_Instance2: Some(Default::default()),
 		pallet_membership_Instance1: Some(Default::default()),
+		pallet_elections_phragmen: Some(Default::default()),
 		pallet_sudo: Some(Default::default()),
 		pallet_treasury: Some(Default::default()),
 		pallet_society: Some(SocietyConfig {

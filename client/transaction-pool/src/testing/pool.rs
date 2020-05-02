@@ -20,7 +20,7 @@ use futures::executor::block_on;
 use txpool::{self, Pool};
 use sp_runtime::{
 	generic::BlockId,
-	transaction_validity::{ValidTransaction, InvalidTransaction, TransactionSource},
+	transaction_validity::{ValidTransaction, TransactionSource, InvalidTransaction},
 };
 use substrate_test_runtime_client::{
 	runtime::{Block, Hash, Index, Header, Extrinsic, Transfer},
@@ -219,7 +219,6 @@ fn should_revalidate_during_maintenance() {
 
 	pool.api.push_block(1, vec![xt1.clone()]);
 
-	notifier.clear();
 	block_on(pool.maintain(block_event(1)));
 	assert_eq!(pool.status().ready, 1);
 	block_on(notifier.next());
@@ -263,14 +262,9 @@ fn should_not_retain_invalid_hashes_from_retracted() {
 
 	let event = block_event_with_retracted(1, vec![retracted_hash]);
 
-	notifier.clear();
 	block_on(pool.maintain(event));
-	// maintenance is in background
 	block_on(notifier.next());
 
-	let event = block_event_with_retracted(1, vec![retracted_hash]);
-
-	block_on(pool.maintain(event));
 	assert_eq!(pool.status().ready, 0);
 }
 
@@ -285,9 +279,7 @@ fn should_revalidate_transaction_multiple_times() {
 
 	pool.api.push_block(1, vec![xt.clone()]);
 
-	notifier.clear();
 	block_on(pool.maintain(block_event(1)));
-	block_on(notifier.next());
 
 	block_on(pool.submit_one(&BlockId::number(0), SOURCE, xt.clone())).expect("1. Imported");
 	assert_eq!(pool.status().ready, 1);
@@ -295,7 +287,6 @@ fn should_revalidate_transaction_multiple_times() {
 	pool.api.push_block(2, vec![]);
 	pool.api.add_invalid(&xt);
 
-	notifier.clear();
 	block_on(pool.maintain(block_event(2)));
 	block_on(notifier.next());
 
@@ -315,7 +306,6 @@ fn should_revalidate_across_many_blocks() {
 	assert_eq!(pool.status().ready, 2);
 
 	pool.api.push_block(1, vec![]);
-	notifier.clear();
 	block_on(pool.maintain(block_event(1)));
 	block_on(notifier.next());
 
@@ -323,7 +313,6 @@ fn should_revalidate_across_many_blocks() {
 	assert_eq!(pool.status().ready, 3);
 
 	pool.api.push_block(2, vec![xt1.clone()]);
-	notifier.clear();
 	block_on(pool.maintain(block_event(2)));
 	block_on(notifier.next());
 
@@ -369,7 +358,6 @@ fn should_push_watchers_during_maintaince() {
 	pool.api.add_invalid(&tx4);
 
 	// clear timer events if any
-	notifier.clear();
 	block_on(pool.maintain(block_event(0)));
 	block_on(notifier.next());
 
@@ -427,7 +415,7 @@ fn finalization() {
 	let xt = uxt(Alice, 209);
 	let api = TestApi::with_alice_nonce(209);
 	api.push_block(1, vec![]);
-	let (pool, _background) = BasicPool::new(Default::default(), api.into());
+	let (pool, _background, _) = BasicPool::new_test(api.into());
 	let watcher = block_on(
 		pool.submit_and_watch(&BlockId::number(1), SOURCE, xt.clone())
 	).expect("1. Imported");
@@ -458,7 +446,7 @@ fn fork_aware_finalization() {
 	// starting block A1 (last finalized.)
 	api.push_block(1, vec![]);
 
-	let (pool, _background) = BasicPool::new(Default::default(), api.into());
+	let (pool, _background, _) = BasicPool::new_test(api.into());
 	let mut canon_watchers = vec![];
 
 	let from_alice = uxt(Alice, 1);
@@ -689,7 +677,7 @@ fn should_not_accept_old_signatures() {
 
 	let client = Arc::new(substrate_test_runtime_client::new());
 	let pool = Arc::new(
-		BasicPool::new(Default::default(), Arc::new(FullChainApi::new(client))).0
+		BasicPool::new_test(Arc::new(FullChainApi::new(client))).0
 	);
 
 	let transfer = Transfer {
@@ -712,6 +700,6 @@ fn should_not_accept_old_signatures() {
 		Err(error::Error::Pool(
 			sp_transaction_pool::error::Error::InvalidTransaction(InvalidTransaction::BadProof)
 		)),
-		"Should be invalid transactiono with bad proof",
+		"Should be invalid transaction with bad proof",
 	);
 }

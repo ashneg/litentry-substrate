@@ -20,7 +20,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use log::{debug, warn, info};
+use log::{debug, warn};
 use parity_scale_codec::{Decode, Encode};
 use futures::prelude::*;
 use futures_timer::Delay;
@@ -28,8 +28,7 @@ use parking_lot::RwLock;
 use sp_blockchain::{HeaderBackend, Error as ClientError, HeaderMetadata};
 use std::marker::PhantomData;
 
-use sc_client_api::{backend::Backend, utils::is_descendent_of};
-use sc_client::apply_aux;
+use sc_client_api::{backend::{Backend, apply_aux}, utils::is_descendent_of};
 use finality_grandpa::{
 	BlockNumberOps, Equivocation, Error as GrandpaError, round::State as RoundState,
 	voter, voter_set::VoterSet,
@@ -580,23 +579,23 @@ where
 	Block: 'static,
 	B: Backend<Block>,
 	C: crate::ClientForGrandpa<Block, B> + 'static,
- 	N: NetworkT<Block> + 'static + Send,
+	N: NetworkT<Block> + 'static + Send + Sync,
 	SC: SelectChain<Block> + 'static,
 	VR: VotingRule<Block, C>,
 	NumberFor<Block>: BlockNumberOps,
 {
-	type Timer = Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send>>;
+	type Timer = Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + Sync>>;
 	type Id = AuthorityId;
 	type Signature = AuthoritySignature;
 
 	// regular round message streams
 	type In = Pin<Box<dyn Stream<
 		Item = Result<::finality_grandpa::SignedMessage<Block::Hash, NumberFor<Block>, Self::Signature, Self::Id>, Self::Error>
-	> + Send>>;
+	> + Send + Sync>>;
 	type Out = Pin<Box<dyn Sink<
 		::finality_grandpa::Message<Block::Hash, NumberFor<Block>>,
 		Error = Self::Error,
-	> + Send>>;
+	> + Send + Sync>>;
 
 	type Error = CommandOrError<Block::Hash, NumberFor<Block>>;
 
@@ -636,6 +635,7 @@ where
 			self.client.clone(),
 			incoming,
 			"round",
+			None,
 		).map_err(Into::into));
 
 		// schedule network message cleanup when sink drops.
@@ -910,6 +910,7 @@ where
 			hash,
 			number,
 			(round, commit).into(),
+			false,
 		)
 	}
 
@@ -969,6 +970,7 @@ pub(crate) fn finalize_block<BE, Block, Client>(
 	hash: Block::Hash,
 	number: NumberFor<Block>,
 	justification_or_commit: JustificationOrCommit<Block>,
+	initial_sync: bool,
 ) -> Result<(), CommandOrError<Block::Hash, NumberFor<Block>>> where
 	Block:  BlockT,
 	BE: Backend<Block>,
@@ -1010,6 +1012,7 @@ pub(crate) fn finalize_block<BE, Block, Client>(
 			hash,
 			number,
 			&is_descendent_of::<Block, _>(&*client, None),
+			initial_sync,
 		).map_err(|e| Error::Safety(e.to_string()))?;
 
 		// check if this is this is the first finalization of some consensus changes
@@ -1090,9 +1093,15 @@ pub(crate) fn finalize_block<BE, Block, Client>(
 			let (new_id, set_ref) = authority_set.current();
 
 			if set_ref.len() > 16 {
-				info!("👴 Applying GRANDPA set change to new set with {} authorities", set_ref.len());
+				afg_log!(initial_sync,
+					"👴 Applying GRANDPA set change to new set with {} authorities",
+					set_ref.len(),
+				);
 			} else {
-				info!("👴 Applying GRANDPA set change to new set {:?}", set_ref);
+				afg_log!(initial_sync,
+					"👴 Applying GRANDPA set change to new set {:?}",
+					set_ref,
+				);
 			}
 
 			telemetry!(CONSENSUS_INFO; "afg.generating_new_authority_set";

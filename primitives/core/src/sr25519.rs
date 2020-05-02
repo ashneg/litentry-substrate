@@ -39,7 +39,7 @@ use crate::crypto::{
 #[cfg(feature = "std")]
 use crate::crypto::Ss58Codec;
 
-use crate::{crypto::{Public as TraitPublic, UncheckedFrom, CryptoType, Derive}};
+use crate::crypto::{Public as TraitPublic, CryptoTypePublicPair, UncheckedFrom, CryptoType, Derive, CryptoTypeId};
 use crate::hash::{H256, H512};
 use codec::{Encode, Decode};
 use sp_std::ops::Deref;
@@ -53,6 +53,9 @@ use sp_runtime_interface::pass_by::PassByInner;
 // signing context
 #[cfg(feature = "full_crypto")]
 const SIGNING_CTX: &[u8] = b"substrate";
+
+/// An identifier used to match public keys against sr25519 keys
+pub const CRYPTO_ID: CryptoTypeId = CryptoTypeId(*b"sr25");
 
 /// An Schnorrkel/Ristretto x25519 ("sr25519") public key.
 #[cfg_attr(feature = "full_crypto", derive(Hash))]
@@ -390,6 +393,18 @@ impl TraitPublic for Public {
 	}
 }
 
+impl From<Public> for CryptoTypePublicPair {
+    fn from(key: Public) -> Self {
+        (&key).into()
+    }
+}
+
+impl From<&Public> for CryptoTypePublicPair {
+    fn from(key: &Public) -> Self {
+        CryptoTypePublicPair(CRYPTO_ID, key.to_raw_vec())
+    }
+}
+
 #[cfg(feature = "std")]
 impl From<MiniSecretKey> for Pair {
 	fn from(sec: MiniSecretKey) -> Pair {
@@ -596,10 +611,49 @@ impl CryptoType for Pair {
 	type Pair = Pair;
 }
 
+/// Batch verification.
+///
+/// `messages`, `signatures` and `pub_keys` should all have equal length.
+///
+/// Returns `true` if all signatures are correct, `false` otherwise.
+#[cfg(feature = "std")]
+pub fn verify_batch(
+	messages: Vec<&[u8]>,
+	signatures: Vec<&Signature>,
+	pub_keys: Vec<&Public>,
+) -> bool {
+	let mut sr_pub_keys = Vec::with_capacity(pub_keys.len());
+	for pub_key in pub_keys {
+		match schnorrkel::PublicKey::from_bytes(pub_key.as_ref()) {
+			Ok(pk) => sr_pub_keys.push(pk),
+			Err(_) => return false,
+		};
+	}
+
+	let mut sr_signatures = Vec::with_capacity(signatures.len());
+	for signature in signatures {
+		match schnorrkel::Signature::from_bytes(signature.as_ref()) {
+			Ok(s) => sr_signatures.push(s),
+			Err(_) => return false
+		};
+	}
+
+	let mut messages: Vec<merlin::Transcript> = messages.into_iter().map(
+		|msg| signing_context(SIGNING_CTX).bytes(msg)
+	).collect();
+
+	schnorrkel::verify_batch(
+		&mut messages,
+		&sr_signatures,
+		&sr_pub_keys,
+		true,
+	).is_ok()
+}
+
 #[cfg(test)]
 mod compatibility_test {
 	use super::*;
-	use crate::crypto::{DEV_PHRASE};
+	use crate::crypto::DEV_PHRASE;
 	use hex_literal::hex;
 
 	// NOTE: tests to ensure addresses that are created with the `0.1.x` version (pre-audit) are

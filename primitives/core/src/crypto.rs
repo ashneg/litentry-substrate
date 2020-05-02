@@ -21,6 +21,7 @@
 use crate::{sr25519, ed25519};
 use sp_std::hash::Hash;
 use sp_std::vec::Vec;
+use sp_std::str;
 #[cfg(feature = "std")]
 use sp_std::convert::TryInto;
 use sp_std::convert::TryFrom;
@@ -33,7 +34,8 @@ use codec::{Encode, Decode};
 use regex::Regex;
 #[cfg(feature = "std")]
 use base58::{FromBase58, ToBase58};
-
+#[cfg(feature = "std")]
+use crate::hexdisplay::HexDisplay;
 use zeroize::Zeroize;
 #[doc(hidden)]
 pub use sp_std::ops::Deref;
@@ -453,10 +455,14 @@ ss58_address_format!(
 		(10, "acala", "Acala mainnet, standard account (*25519).")
 	LaminarAccount =>
 		(11, "laminar", "Laminar mainnet, standard account (*25519).")
+	PolymathAccount =>
+		(12, "polymath", "Polymath network, standard account (*25519).")
 	KulupuAccount =>
 		(16, "kulupu", "Kulupu mainnet, standard account (*25519).")
 	DarwiniaAccount =>
 		(18, "darwinia", "Darwinia Chain mainnet, standard account (*25519).")
+	RobonomicsAccount =>
+		(32, "robonomics", "Any Robonomics network standard account (*25519).")
 	CentrifugeAccount =>
 		(36, "centrifuge", "Centrifuge Chain mainnet, standard account (*25519).")
 	SubstrateAccount =>
@@ -539,7 +545,9 @@ impl<T: Sized + AsMut<[u8]> + AsRef<[u8]> + Default + Derive> Ss58Codec for T {
 }
 
 /// Trait suitable for typical cryptographic PKI key public type.
-pub trait Public: AsRef<[u8]> + AsMut<[u8]> + Default + Derive + CryptoType + PartialEq + Eq + Clone + Send + Sync {
+pub trait Public:
+	AsRef<[u8]> + AsMut<[u8]> + Default + Derive + CryptoType + PartialEq + Eq + Clone + Send + Sync
+{
 	/// A new instance from the given slice.
 	///
 	/// NOTE: No checking goes on to ensure this is a real public key. Only use it if
@@ -955,6 +963,27 @@ impl<'a> TryFrom<&'a str> for KeyTypeId {
 	}
 }
 
+/// An identifier for a specific cryptographic algorithm used by a key pair
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode)]
+pub struct CryptoTypeId(pub [u8; 4]);
+
+/// A type alias of CryptoTypeId & a public key
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode)]
+pub struct CryptoTypePublicPair(pub CryptoTypeId, pub Vec<u8>);
+
+#[cfg(feature = "std")]
+impl sp_std::fmt::Display for CryptoTypePublicPair {
+	fn fmt(&self, f: &mut sp_std::fmt::Formatter) -> sp_std::fmt::Result {
+		let id = match str::from_utf8(&(self.0).0[..]) {
+			Ok(id) => id.to_string(),
+			Err(_) => {
+				format!("{:#?}", self.0)
+			}
+		};
+		write!(f, "{}-{}", id, HexDisplay::from(&self.1))
+	}
+}
+
 /// Known key types; this also functions as a global registry of key types for projects wishing to
 /// avoid collisions with each other.
 ///
@@ -963,19 +992,19 @@ impl<'a> TryFrom<&'a str> for KeyTypeId {
 pub mod key_types {
 	use super::KeyTypeId;
 
-	/// Key type for Babe module, build-in.
+	/// Key type for Babe module, built-in. Identified as `babe`.
 	pub const BABE: KeyTypeId = KeyTypeId(*b"babe");
-	/// Key type for Grandpa module, build-in.
+	/// Key type for Grandpa module, built-in. Identified as `gran`.
 	pub const GRANDPA: KeyTypeId = KeyTypeId(*b"gran");
-	/// Key type for controlling an account in a Substrate runtime, built-in.
+	/// Key type for controlling an account in a Substrate runtime, built-in. Identified as `acco`.
 	pub const ACCOUNT: KeyTypeId = KeyTypeId(*b"acco");
-	/// Key type for Aura module, built-in.
+	/// Key type for Aura module, built-in. Identified as `aura`.
 	pub const AURA: KeyTypeId = KeyTypeId(*b"aura");
-	/// Key type for ImOnline module, built-in.
+	/// Key type for ImOnline module, built-in. Identified as `imon`.
 	pub const IM_ONLINE: KeyTypeId = KeyTypeId(*b"imon");
-	/// Key type for AuthorityDiscovery module, built-in.
+	/// Key type for AuthorityDiscovery module, built-in. Identified as `audi`.
 	pub const AUTHORITY_DISCOVERY: KeyTypeId = KeyTypeId(*b"audi");
-	/// Key type for staking, built-in.
+	/// Key type for staking, built-in. Identified as `stak`.
 	pub const STAKING: KeyTypeId = KeyTypeId(*b"stak");
 	/// A key type ID useful for tests.
 	pub const DUMMY: KeyTypeId = KeyTypeId(*b"dumy");

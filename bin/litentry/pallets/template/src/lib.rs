@@ -7,12 +7,12 @@ use frame_support::{
     decl_error, decl_event, decl_module, decl_storage,
     dispatch::DispatchResult,
     ensure,
-    weights::{SimpleDispatchInfo},
+    weights::Weight,
     StorageMap, StorageValue,
 };
 use frame_system::{self as system, ensure_signed};
 use sp_std::prelude::*;
-use sp_runtime::{
+use frame_support::sp_runtime::{
     traits::{
         AtLeast32Bit, Bounded, Hash, Member,
         Saturating, StaticLookup, Zero,
@@ -71,34 +71,34 @@ decl_event!(
 decl_storage! {
     trait Store for Module<T: Trait> as LitentryStorage {
         // Identity: Declare storage and getter functions here
-        Identities get(identity): map hasher(blake2_128_concat) T::Hash => IdentityOf<T>;
-        IdentityOwner get(owner_of_identity): map hasher(blake2_128_concat) T::Hash => Option<T::AccountId>;
+        Identities get(fn identity): map hasher(blake2_128_concat) T::Hash => IdentityOf<T>;
+        IdentityOwner get(fn owner_of_identity): map hasher(blake2_128_concat) T::Hash => Option<T::AccountId>;
 
-        IdentitiesCount get(identities_count): u64;
-        IdentitiesArray get(identity_by_index): map hasher(blake2_128_concat) u64 => T::Hash;
-        IdentitiesIndex get(identity_index): map hasher(blake2_128_concat) T::Hash => u64;
+        IdentitiesCount get(fn identities_count): u64;
+        IdentitiesArray get(fn identity_by_index): map hasher(blake2_128_concat) u64 => T::Hash;
+        IdentitiesIndex get(fn identity_index): map hasher(blake2_128_concat) T::Hash => u64;
 
-        OwnedIdentitiesCount get(identities_count_of_owner): map hasher(blake2_128_concat) T::AccountId => u64;
-        OwnedIdentitiesArray get(identity_by_index_of_owner): map hasher(blake2_128_concat) (T::AccountId, u64) => T::Hash;
-        OwnedIdentitiesIndex get(identity_index_of_owner): map hasher(blake2_128_concat) T::Hash => u64;
+        OwnedIdentitiesCount get(fn identities_count_of_owner): map hasher(blake2_128_concat) T::AccountId => u64;
+        OwnedIdentitiesArray get(fn identity_by_index_of_owner): map hasher(blake2_128_concat) (T::AccountId, u64) => T::Hash;
+        OwnedIdentitiesIndex get(fn identity_index_of_owner): map hasher(blake2_128_concat) T::Hash => u64;
 
         // AuthorizedToken: Declare storage and getter functions here
-        AuthorizedTokens get(token): map hasher(blake2_128_concat) T::Hash => AuthorizedTokenOf<T>;
-        AuthorizedTokenOwner get(owner_of_token): map hasher(blake2_128_concat) T::Hash => Option<T::AccountId>;
-        AuthorizedTokenIdentity get(identity_of_token): map hasher(blake2_128_concat) T::Hash => Option<T::Hash>;
+        AuthorizedTokens get(fn token): map hasher(blake2_128_concat) T::Hash => AuthorizedTokenOf<T>;
+        AuthorizedTokenOwner get(fn owner_of_token): map hasher(blake2_128_concat) T::Hash => Option<T::AccountId>;
+        AuthorizedTokenIdentity get(fn identity_of_token): map hasher(blake2_128_concat) T::Hash => Option<T::Hash>;
 
-        AuthorizedTokensCount get(tokens_count): u64;
-        AuthorizedTokensArray get(token_by_index): map hasher(blake2_128_concat) u64 => T::Hash;
-        AuthorizedTokensIndex get(token_index): map hasher(blake2_128_concat) T::Hash => u64;
+        AuthorizedTokensCount get(fn tokens_count): u64;
+        AuthorizedTokensArray get(fn token_by_index): map hasher(blake2_128_concat) u64 => T::Hash;
+        AuthorizedTokensIndex get(fn token_index): map hasher(blake2_128_concat) T::Hash => u64;
 
-        OwnedAuthorizedTokensCount get(tokens_count_of_owner): map hasher(blake2_128_concat) T::AccountId => u64;
-        OwnedAuthorizedTokensArray get(token_by_index_of_owner): map hasher(blake2_128_concat) (T::AccountId, u64) => T::Hash;
-        OwnedAuthorizedTokensIndex get(token_index_of_owner): map hasher(blake2_128_concat) T::Hash => u64;
+        OwnedAuthorizedTokensCount get(fn tokens_count_of_owner): map hasher(blake2_128_concat) T::AccountId => u64;
+        OwnedAuthorizedTokensArray get(fn token_by_index_of_owner): map hasher(blake2_128_concat) (T::AccountId, u64) => T::Hash;
+        OwnedAuthorizedTokensIndex get(fn token_index_of_owner): map hasher(blake2_128_concat) T::Hash => u64;
 
         // Identity to token map
-        IdentityAuthorizedTokensCount get(tokens_count_of_identity): map hasher(blake2_128_concat) T::Hash => u64;
-        IdentityAuthorizedTokensArray get(token_by_index_of_identity): map hasher(blake2_128_concat) (T::Hash, u64) => T::Hash;
-        IdentityAuthorizedTokensIndex get(token_index_of_identity): map hasher(blake2_128_concat) T::Hash => u64;
+        IdentityAuthorizedTokensCount get(fn tokens_count_of_identity): map hasher(blake2_128_concat) T::Hash => u64;
+        IdentityAuthorizedTokensArray get(fn token_by_index_of_identity): map hasher(blake2_128_concat) (T::Hash, u64) => T::Hash;
+        IdentityAuthorizedTokensIndex get(fn token_index_of_identity): map hasher(blake2_128_concat) T::Hash => u64;
 
         Nonce: u64;
     }
@@ -123,7 +123,7 @@ decl_module! {
         fn deposit_event() = default;
 
         // public functions
-        #[weight = SimpleDispatchInfo::FixedNormal(700)]
+        #[weight = 700]
         pub fn register_identity(origin) -> DispatchResult {
             let sender = ensure_signed(origin)?;
             let random_hash = Self::get_hash(&sender);
@@ -136,7 +136,7 @@ decl_module! {
             // Ok(())
         }
 
-        #[weight = SimpleDispatchInfo::FixedNormal(700)]
+        #[weight = 700]
         fn register_identity_with_id(origin, identity_id: T::Hash) -> DispatchResult {
             let sender = ensure_signed(origin)?;
 
@@ -150,7 +150,7 @@ decl_module! {
             // Ok(())
         }
 
-        #[weight = SimpleDispatchInfo::FixedNormal(1200)]
+        #[weight = 1200]
         fn issue_token(
             origin,
             to: T::AccountId,
@@ -177,7 +177,7 @@ decl_module! {
             Ok(())
         }
 
-        #[weight = SimpleDispatchInfo::FixedNormal(900)]
+        #[weight = 900]
         fn transfer_token(origin, to: T::AccountId, token_id: T::Hash ) -> DispatchResult {
             let sender = ensure_signed(origin)?;
 
@@ -190,7 +190,7 @@ decl_module! {
             Ok(())
         }
 
-        #[weight = SimpleDispatchInfo::FixedNormal(100)]
+        #[weight = 100]
         fn request_authentication(origin, token_id: T::Hash, url:Vec<u8>) -> DispatchResult {
             let sender = ensure_signed(origin)?;
 

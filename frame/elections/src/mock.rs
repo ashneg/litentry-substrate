@@ -21,7 +21,7 @@
 use std::cell::RefCell;
 use frame_support::{
 	StorageValue, StorageMap, parameter_types, assert_ok,
-	traits::{Get, ChangeMembers, Currency},
+	traits::{Get, ChangeMembers, Currency, LockIdentifier},
 	weights::Weight,
 };
 use sp_core::H256;
@@ -50,6 +50,9 @@ impl frame_system::Trait for Test {
 	type Event = Event;
 	type BlockHashCount = BlockHashCount;
 	type MaximumBlockWeight = MaximumBlockWeight;
+	type DbWeight = ();
+	type BlockExecutionWeight = ();
+	type ExtrinsicBaseWeight = ();
 	type MaximumBlockLength = MaximumBlockLength;
 	type AvailableBlockRatio = AvailableBlockRatio;
 	type Version = ();
@@ -121,6 +124,10 @@ impl ChangeMembers<u64> for TestChangeMembers {
 	}
 }
 
+parameter_types!{
+	pub const ElectionModuleId: LockIdentifier = *b"py/elect"; 
+}
+
 impl elections::Trait for Test {
 	type Event = Event;
 	type Currency = Balances;
@@ -138,6 +145,7 @@ impl elections::Trait for Test {
 	type InactiveGracePeriod = InactiveGracePeriod;
 	type VotingPeriod = VotingPeriod;
 	type DecayRatio = DecayRatio;
+	type ModuleId = ElectionModuleId;
 }
 
 pub type Block = sp_runtime::generic::Block<Header, UncheckedExtrinsic>;
@@ -208,7 +216,7 @@ impl ExtBuilder {
 		VOTING_FEE.with(|v| *v.borrow_mut() = self.voting_fee);
 		PRESENT_SLASH_PER_VOTER.with(|v| *v.borrow_mut() = self.bad_presentation_punishment);
 		DECAY_RATIO.with(|v| *v.borrow_mut() = self.decay_ratio);
-		GenesisConfig {
+		let mut ext: sp_io::TestExternalities = GenesisConfig {
 			pallet_balances: Some(pallet_balances::GenesisConfig::<Test>{
 				balances: vec![
 					(1, 10 * self.balance_factor),
@@ -225,7 +233,9 @@ impl ExtBuilder {
 				presentation_duration: 2,
 				term_duration: 5,
 			}),
-		}.build_storage().unwrap().into()
+		}.build_storage().unwrap().into();
+		ext.execute_with(|| System::set_block_number(1));
+		ext
 	}
 }
 

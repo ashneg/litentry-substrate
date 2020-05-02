@@ -49,11 +49,12 @@ use sp_consensus::{
 	SelectChain, Error as ConsensusError, CanAuthorWith, RecordProof, BlockImport,
 	BlockCheckParams, ImportResult,
 };
-use sp_consensus::import_queue::{BoxBlockImport, BasicQueue, Verifier};
+use sp_consensus::import_queue::{BoxBlockImport, BasicQueue, Verifier, BoxJustificationImport, BoxFinalityProofImport};
 use codec::{Encode, Decode};
 use sc_client_api;
 use log::*;
 use sp_timestamp::{InherentError as TIError, TimestampInherentData};
+use futures::future::BoxFuture;
 
 #[derive(derive_more::Display, Debug)]
 pub enum Error<B: BlockT> {
@@ -151,7 +152,7 @@ pub trait PowAlgorithm<B: BlockT> {
 	///
 	/// This function will be called twice during the import process, so the implementation
 	/// should be properly cached.
-	fn difficulty(&self, parent: &BlockId<B>) -> Result<Self::Difficulty, Error<B>>;
+	fn difficulty(&self, parent: B::Hash) -> Result<Self::Difficulty, Error<B>>;
 	/// Verify that the seal is valid against given pre hash when parent block is not yet imported.
 	///
 	/// None means that preliminary verify is not available for this algorithm.
@@ -335,7 +336,7 @@ impl<B, I, C, S, Algorithm> BlockImport<B> for PowBlockImport<B, I, C, S, Algori
 
 		let difficulty = match intermediate.difficulty {
 			Some(difficulty) => difficulty,
-			None => self.algorithm.difficulty(&BlockId::hash(parent_hash))?,
+			None => self.algorithm.difficulty(parent_hash)?,
 		};
 
 		let pre_hash = block.header.hash();
@@ -457,8 +458,11 @@ pub type PowImportQueue<B, Transaction> = BasicQueue<B, Transaction>;
 /// Import queue for PoW engine.
 pub fn import_queue<B, Transaction, Algorithm>(
 	block_import: BoxBlockImport<B, Transaction>,
+	justification_import: Option<BoxJustificationImport<B>>,
+	finality_proof_import: Option<BoxFinalityProofImport<B>>,
 	algorithm: Algorithm,
 	inherent_data_providers: InherentDataProviders,
+	spawner: impl Fn(BoxFuture<'static, ()>) -> (),
 ) -> Result<
 	PowImportQueue<B, Transaction>,
 	sp_consensus::Error
@@ -474,8 +478,9 @@ pub fn import_queue<B, Transaction, Algorithm>(
 	Ok(BasicQueue::new(
 		verifier,
 		block_import,
-		None,
-		None
+		justification_import,
+		finality_proof_import,
+		spawner,
 	))
 }
 
@@ -617,9 +622,7 @@ fn mine_loop<B: BlockT, C, Algorithm, E, SO, S, CAW>(
 
 		let (header, body) = proposal.block.deconstruct();
 		let (difficulty, seal) = {
-			let difficulty = algorithm.difficulty(
-				&BlockId::Hash(best_hash),
-			)?;
+			let difficulty = algorithm.difficulty(best_hash)?;
 
 			loop {
 				let seal = algorithm.mine(

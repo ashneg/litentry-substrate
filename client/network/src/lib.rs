@@ -129,6 +129,14 @@
 //! light-client-related requests for information about the state. Each request is the encoding of
 //! a `light::Request` and each response is the encoding of a `light::Response`, as defined in the
 //! `light.v1.proto` file in this source tree.
+//! - **`/<protocol-id>/transactions/1`** is a notifications protocol (see below) where
+//! transactions are pushed to other nodes. The handshake is empty on both sides. The message
+//! format is a SCALE-encoded list of transactions, where each transaction is an opaque list of
+//! bytes.
+//! - **`/<protocol-id>/block-announces/1`** is a notifications protocol (see below) where
+//! block announces are pushed to other nodes. The handshake is empty on both sides. The message
+//! format is a SCALE-encoded tuple containing a block header followed with an opaque list of
+//! bytes containing some data associated with this block announcement, e.g. a candidate message.
 //! - Notifications protocols that are registered using the `register_notifications_protocol`
 //! method. For example: `/paritytech/grandpa/1`. See below for more information.
 //!
@@ -202,7 +210,14 @@
 //! notifications protocol.
 //!
 //! At the moment, for backwards-compatibility, notification protocols are tied to the legacy
-//! Substrate substream. In the future, though, it will no longer be the case.
+//! Substrate substream. Additionally, the handshake message is hardcoded to be a single 8-bits
+//! integer representing the role of the node:
+//!
+//! - 1 for a full node.
+//! - 2 for a light node.
+//! - 4 for an authority.
+//!
+//! In the future, though, these restrictions will be removed.
 //!
 //! # Usage
 //!
@@ -225,11 +240,15 @@
 //!
 
 mod behaviour;
+mod block_requests;
 mod chain;
 mod debug_info;
 mod discovery;
+mod finality_requests;
+mod light_client_handler;
 mod on_demand_layer;
 mod protocol;
+mod schema;
 mod service;
 mod transport;
 mod utils;
@@ -238,9 +257,9 @@ pub mod config;
 pub mod error;
 pub mod network_state;
 
-pub use service::{NetworkService, NetworkStateInfo, NetworkWorker, ExHashT, ReportHandle};
+pub use service::{NetworkService, NetworkWorker};
 pub use protocol::PeerInfo;
-pub use protocol::event::{Event, DhtEvent};
+pub use protocol::event::{Event, DhtEvent, ObservedRole};
 pub use protocol::sync::SyncState;
 pub use libp2p::{Multiaddr, PeerId};
 #[doc(inline)]
@@ -248,13 +267,46 @@ pub use libp2p::multiaddr;
 
 pub use sc_peerset::ReputationChange;
 
-/// Extension trait for `NetworkBehaviour` that also accepts discovering nodes.
-trait DiscoveryNetBehaviour {
-	/// Notify the protocol that we have learned about the existence of nodes.
-	///
-	/// Can (or most likely will) be called multiple times with the same `PeerId`s.
-	///
-	/// Also note that there is no notification for expired nodes. The implementer must add a TTL
-	/// system, or remove nodes that will fail to reach.
-	fn add_discovered_nodes(&mut self, nodes: impl Iterator<Item = PeerId>);
+/// The maximum allowed number of established connections per peer.
+///
+/// Typically, and by design of the network behaviours in this crate,
+/// there is a single established connection per peer. However, to
+/// avoid unnecessary and nondeterministic connection closure in
+/// case of (possibly repeated) simultaneous dialing attempts between
+/// two peers, the per-peer connection limit is not set to 1 but 2.
+const MAX_CONNECTIONS_PER_PEER: usize = 2;
+
+/// Minimum Requirements for a Hash within Networking
+pub trait ExHashT: std::hash::Hash + Eq + std::fmt::Debug + Clone + Send + Sync + 'static {}
+
+impl<T> ExHashT for T where T: std::hash::Hash + Eq + std::fmt::Debug + Clone + Send + Sync + 'static
+{}
+
+/// A cloneable handle for reporting cost/benefits of peers.
+#[derive(Clone)]
+pub struct ReportHandle {
+	inner: sc_peerset::PeersetHandle, // wraps it so we don't have to worry about breaking API.
+}
+
+impl From<sc_peerset::PeersetHandle> for ReportHandle {
+	fn from(peerset_handle: sc_peerset::PeersetHandle) -> Self {
+		ReportHandle { inner: peerset_handle }
+	}
+}
+
+impl ReportHandle {
+	/// Report a given peer as either beneficial (+) or costly (-) according to the
+	/// given scalar.
+	pub fn report_peer(&self, who: PeerId, cost_benefit: ReputationChange) {
+		self.inner.report_peer(who, cost_benefit);
+	}
+}
+
+/// Trait for providing information about the local network state
+pub trait NetworkStateInfo {
+	/// Returns the local external addresses.
+	fn external_addresses(&self) -> Vec<Multiaddr>;
+
+	/// Returns the local Peer ID.
+	fn local_peer_id(&self) -> PeerId;
 }
