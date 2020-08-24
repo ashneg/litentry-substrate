@@ -1,24 +1,15 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use pallet_balances;
 use codec::{Decode, Encode};
+use frame_support::sp_runtime::{traits::Hash, RuntimeDebug};
 use frame_support::traits::Randomness;
 use frame_support::{
-    decl_error, decl_event, decl_module, decl_storage,
-    dispatch::DispatchResult,
-    ensure,
-    weights::Weight,
+    decl_error, decl_event, decl_module, decl_storage, dispatch::DispatchResult, ensure,
     StorageMap, StorageValue,
 };
 use frame_system::{self as system, ensure_signed};
+use pallet_balances;
 use sp_std::prelude::*;
-use frame_support::sp_runtime::{
-    traits::{
-        AtLeast32Bit, Bounded, Hash, Member,
-        Saturating, StaticLookup, Zero,
-    },
-    RuntimeDebug,
-};
 // use litentry_weights::Linear;
 
 #[cfg(test)]
@@ -61,8 +52,8 @@ decl_event!(
             //<T as balances::Trait>::Balance
         {
             IdentityCreated(AccountId, Hash),
-            AuthorizedTokenCreated(AccountId, Hash, Hash),
-            AuthorizedTokenTransferred(AccountId, AccountId, Hash),
+            AuthorizedTokenCreated(Hash, Hash, Hash),
+            AuthorizedTokenTransferred(AccountId, Hash, Hash),
             AuthenticaterRequest(AccountId, Hash, Vec<u8>),
             //ACTION: Create a `Transferred` event here
         }
@@ -84,21 +75,21 @@ decl_storage! {
 
         // AuthorizedToken: Declare storage and getter functions here
         AuthorizedTokens get(fn token): map hasher(blake2_128_concat) T::Hash => AuthorizedTokenOf<T>;
-        AuthorizedTokenOwner get(fn owner_of_token): map hasher(blake2_128_concat) T::Hash => Option<T::AccountId>;
-        AuthorizedTokenIdentity get(fn identity_of_token): map hasher(blake2_128_concat) T::Hash => Option<T::Hash>;
+        AuthorizedTokenOwner get(fn owner_identity_of_token): map hasher(blake2_128_concat) T::Hash => Option<T::Hash>;
+        AuthorizedTokenIdentity get(fn issuer_identity_of_token): map hasher(blake2_128_concat) T::Hash => Option<T::Hash>;
 
         AuthorizedTokensCount get(fn tokens_count): u64;
         AuthorizedTokensArray get(fn token_by_index): map hasher(blake2_128_concat) u64 => T::Hash;
         AuthorizedTokensIndex get(fn token_index): map hasher(blake2_128_concat) T::Hash => u64;
 
-        OwnedAuthorizedTokensCount get(fn tokens_count_of_owner): map hasher(blake2_128_concat) T::AccountId => u64;
-        OwnedAuthorizedTokensArray get(fn token_by_index_of_owner): map hasher(blake2_128_concat) (T::AccountId, u64) => T::Hash;
-        OwnedAuthorizedTokensIndex get(fn token_index_of_owner): map hasher(blake2_128_concat) T::Hash => u64;
+        OwnedAuthorizedTokensCount get(fn owned_tokens_count_of_identity): map hasher(blake2_128_concat) T::Hash => u64;
+        OwnedAuthorizedTokensArray get(fn owned_token_by_index_of_identity): map hasher(blake2_128_concat) (T::Hash, u64) => T::Hash;
+        OwnedAuthorizedTokensIndex get(fn token_index_of_owner_identity): map hasher(blake2_128_concat) T::Hash => u64;
 
         // Identity to token map
-        IdentityAuthorizedTokensCount get(fn tokens_count_of_identity): map hasher(blake2_128_concat) T::Hash => u64;
-        IdentityAuthorizedTokensArray get(fn token_by_index_of_identity): map hasher(blake2_128_concat) (T::Hash, u64) => T::Hash;
-        IdentityAuthorizedTokensIndex get(fn token_index_of_identity): map hasher(blake2_128_concat) T::Hash => u64;
+        IdentityAuthorizedTokensCount get(fn issued_tokens_count_of_identity): map hasher(blake2_128_concat) T::Hash => u64;
+        IdentityAuthorizedTokensArray get(fn issued_token_by_index_of_identity): map hasher(blake2_128_concat) (T::Hash, u64) => T::Hash;
+        IdentityAuthorizedTokensIndex get(fn token_index_of_issuer_identity): map hasher(blake2_128_concat) T::Hash => u64;
 
         Nonce: u64;
     }
@@ -153,7 +144,7 @@ decl_module! {
         #[weight = 1200]
         fn issue_token(
             origin,
-            to: T::AccountId,
+            to: T::Hash,
             identity_id: T::Hash,
             cost: T::Balance,
             data: u64,
@@ -178,11 +169,8 @@ decl_module! {
         }
 
         #[weight = 900]
-        fn transfer_token(origin, to: T::AccountId, token_id: T::Hash ) -> DispatchResult {
+        fn transfer_token(origin, to: T::Hash, token_id: T::Hash ) -> DispatchResult {
             let sender = ensure_signed(origin)?;
-
-            let owner = Self::owner_of_token(token_id).ok_or("No owner for this token")?;
-            ensure!(owner == sender, "You do not own this token");
 
             Self::token_transfer_from(sender.clone(), to, token_id)?;
             <frame_system::Module<T>>::inc_account_nonce(&sender);
@@ -257,13 +245,13 @@ impl<T: Trait> Module<T> {
     }
 
     fn mint_token(
-        to: T::AccountId,
-        identity_id: T::Hash,
+        receiver_identity: T::Hash,
+        issuer_identity: T::Hash,
         token_id: T::Hash,
         new_token: AuthorizedToken<T::Hash, T::Balance>,
     ) -> DispatchResult {
         ensure!(
-            <IdentityOwner<T>>::contains_key(identity_id),
+            <IdentityOwner<T>>::contains_key(issuer_identity),
             "Identity doesn't exist."
         );
         ensure!(
@@ -271,12 +259,12 @@ impl<T: Trait> Module<T> {
             "Token already exists"
         );
 
-        let owned_tokens_count = Self::tokens_count_of_owner(&to);
+        let owned_tokens_count = Self::owned_tokens_count_of_identity(receiver_identity);
         let new_owned_tokens_count = owned_tokens_count
             .checked_add(1)
             .ok_or("Overflow adding a new token to owner")?;
 
-        let identity_tokens_count = Self::tokens_count_of_identity(identity_id);
+        let identity_tokens_count = Self::owned_tokens_count_of_identity(issuer_identity);
         let new_identity_tokens_count = identity_tokens_count
             .checked_add(1)
             .ok_or("Overflow adding a new token to identity")?;
@@ -287,64 +275,91 @@ impl<T: Trait> Module<T> {
             .ok_or("Overflow adding a new token to total supply")?;
 
         <AuthorizedTokens<T>>::insert(token_id, new_token);
-        <AuthorizedTokenOwner<T>>::insert(token_id, &to);
-        <AuthorizedTokenIdentity<T>>::insert(token_id, &identity_id);
+        <AuthorizedTokenOwner<T>>::insert(token_id, receiver_identity);
+        <AuthorizedTokenIdentity<T>>::insert(token_id, issuer_identity);
 
         <AuthorizedTokensArray<T>>::insert(all_tokens_count, token_id);
         <AuthorizedTokensIndex<T>>::insert(token_id, all_tokens_count);
         <AuthorizedTokensCount>::put(new_all_tokens_count);
 
-        <OwnedAuthorizedTokensArray<T>>::insert((to.clone(), owned_tokens_count), token_id);
+        <OwnedAuthorizedTokensArray<T>>::insert((receiver_identity, owned_tokens_count), token_id);
         <OwnedAuthorizedTokensIndex<T>>::insert(token_id, owned_tokens_count);
-        <OwnedAuthorizedTokensCount<T>>::insert(&to, new_owned_tokens_count);
+        <OwnedAuthorizedTokensCount<T>>::insert(receiver_identity, new_owned_tokens_count);
 
-        <IdentityAuthorizedTokensArray<T>>::insert((identity_id, identity_tokens_count), token_id);
+        <IdentityAuthorizedTokensArray<T>>::insert(
+            (issuer_identity, identity_tokens_count),
+            token_id,
+        );
         <IdentityAuthorizedTokensIndex<T>>::insert(token_id, identity_tokens_count);
-        <IdentityAuthorizedTokensCount<T>>::insert(identity_id, new_identity_tokens_count);
+        <IdentityAuthorizedTokensCount<T>>::insert(issuer_identity, new_identity_tokens_count);
 
-        Self::deposit_event(RawEvent::AuthorizedTokenCreated(to, identity_id, token_id));
+        Self::deposit_event(RawEvent::AuthorizedTokenCreated(
+            receiver_identity,
+            issuer_identity,
+            token_id,
+        ));
 
         Ok(())
     }
 
     fn token_transfer_from(
-        from: T::AccountId,
-        to: T::AccountId,
+        from_account: T::AccountId,
+        receiver_identity: T::Hash,
         token_id: T::Hash,
     ) -> DispatchResult {
-        let owner = Self::owner_of_token(token_id).ok_or("No owner for this token")?;
+        let sender_identity =
+            Self::owner_identity_of_token(token_id).ok_or("No owner identity for this token")?;
+        let owner_account =
+            Self::owner_of_identity(sender_identity).ok_or("No owner account for this token")?;
+        ensure!(
+            owner_account == from_account,
+            "sender do not own this token"
+        );
 
-        ensure!(owner == from, "'from' account does not own this token");
+        let owned_token_count_sender = Self::owned_tokens_count_of_identity(&sender_identity);
+        let owned_token_count_receiver = Self::owned_tokens_count_of_identity(&receiver_identity);
 
-        let owned_token_count_from = Self::tokens_count_of_owner(&from);
-        let owned_token_count_to = Self::tokens_count_of_owner(&to);
-
-        let new_owned_token_count_to = owned_token_count_to
+        let new_owned_token_count_receiver = owned_token_count_receiver
             .checked_add(1)
             .ok_or("Transfer causes overflow of 'to' token balance")?;
 
-        let new_owned_token_count_from = owned_token_count_from
+        let new_owned_token_count_sender = owned_token_count_sender
             .checked_sub(1)
             .ok_or("Transfer causes underflow of 'from' token balance")?;
 
-        let token_index = <OwnedAuthorizedTokensIndex<T>>::get(token_id);
-        if token_index != new_owned_token_count_from {
-            let last_token_id =
-                <OwnedAuthorizedTokensArray<T>>::get((from.clone(), new_owned_token_count_from));
-            <OwnedAuthorizedTokensArray<T>>::insert((from.clone(), token_index), last_token_id);
-            <OwnedAuthorizedTokensIndex<T>>::insert(last_token_id, token_index);
+        let token_index_sender = Self::token_index_of_owner_identity(token_id);
+        if token_index_sender != new_owned_token_count_sender {
+            let last_token_id = Self::owned_token_by_index_of_identity((
+                sender_identity,
+                new_owned_token_count_sender,
+            ));
+            <OwnedAuthorizedTokensArray<T>>::insert(
+                (sender_identity, token_index_sender),
+                last_token_id,
+            );
+            <OwnedAuthorizedTokensIndex<T>>::insert(last_token_id, token_index_sender);
         }
 
-        <AuthorizedTokenOwner<T>>::insert(&token_id, &to);
-        <OwnedAuthorizedTokensIndex<T>>::insert(token_id, owned_token_count_to);
+        <AuthorizedTokenOwner<T>>::insert(token_id, receiver_identity);
+        <OwnedAuthorizedTokensIndex<T>>::insert(token_id, owned_token_count_receiver);
 
-        <OwnedAuthorizedTokensArray<T>>::remove((from.clone(), new_owned_token_count_from));
-        <OwnedAuthorizedTokensArray<T>>::insert((to.clone(), owned_token_count_to), token_id);
+        <OwnedAuthorizedTokensArray<T>>::remove((
+            sender_identity,
+            new_owned_token_count_sender,
+        ));
+        <OwnedAuthorizedTokensArray<T>>::insert(
+            (receiver_identity, owned_token_count_receiver),
+            token_id,
+        );
 
-        <OwnedAuthorizedTokensCount<T>>::insert(&from, new_owned_token_count_from);
-        <OwnedAuthorizedTokensCount<T>>::insert(&to, new_owned_token_count_to);
+        <OwnedAuthorizedTokensCount<T>>::insert(sender_identity, new_owned_token_count_sender);
+        <OwnedAuthorizedTokensCount<T>>::insert(receiver_identity, new_owned_token_count_receiver);
 
-        Self::deposit_event(RawEvent::AuthorizedTokenTransferred(from, to, token_id));
+        Self::deposit_event(RawEvent::AuthorizedTokenTransferred(
+            from_account,
+            receiver_identity,
+            token_id,
+        ));
 
         Ok(())
     }
